@@ -374,6 +374,10 @@ skipped line.
 
 ## Status
 
+NEXT: placing config as copies with drift detection and merge-back,
+replacing symlinks into source; requirements in `docs/placement.md`, not
+yet built.
+
 `survey`, `owed`, `catch-up`, `run`, `report`, `schedule`, `check` and
 `stamp` are implemented: requirements R1 to R11, except that re-seeding
 a vendored file (owed's `reseed`) is reported and not acted on, having
