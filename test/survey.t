@@ -302,6 +302,40 @@ if [ -n "$CAN_LOCK" ]; then
   rmdir "$D/sealed"
 fi
 
+# origin: discovery by RULE. Ours, a third-party clone, one with no
+# origin at all, and (where locks bind) one that cannot be read.
+O=$_T/origin
+mkdir -p "$O"
+for _n in ours theirs bare; do git init -q "$O/$_n"; done
+g "$O/ours" remote add origin "git@github.com:jello-d/ours.git"
+g "$O/theirs" remote add origin "https://github.com/someone/theirs"
+printf 'origin *jello-d/*\n' > "$_T/origin.cfg"
+MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin.cfg survey
+assert "origin: ours is discovered" test -n "$(rec ours)"
+assert "origin: a third-party clone is not" test -z "$(rec theirs)"
+assert "origin: a repo with no origin is not" test -z "$(rec bare)"
+if [ -n "$CAN_LOCK" ]; then
+  mkdir "$O/sealed"
+  chmod 000 "$O/sealed"
+  MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin.cfg survey
+  assert "origin: an unreadable dir stays in (its origin is unknown)" \
+    test -n "$(rec sealed)"
+  chmod 755 "$O/sealed"
+  rmdir "$O/sealed"
+fi
+printf 'origin *jello-d/*\norigin *someone/*\n' > "$_T/origin2.cfg"
+MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin2.cfg survey
+assert "origin: any of several globs" test -n "$(rec theirs)"
+MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin.cfg survey theirs
+assert "origin: a NAMED repo is surveyed whatever its origin" \
+  test -n "$(rec theirs)"
+printf 'origin\n' > "$_T/origin3.cfg"
+MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin3.cfg survey
+expect_rc 2 "origin with no glob"
+printf 'origin a b\n' > "$_T/origin4.cfg"
+MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin4.cfg survey
+expect_rc 2 "origin with two words"
+
 E=$_T/empty
 mkdir "$E"
 MUSTER_ROOT=$E survey

@@ -238,6 +238,13 @@ muster surveys every git repo one level under `~/src`.
                              discovery off. path defaults to root/name
     deployed <name> <path>   a deployed clone of <name>, compared with
                              origin: the third head
+    origin <glob>            discovery takes only repos whose origin URL
+                             matches one of these (e.g. `*jello-d/*`): a
+                             third-party clone is left out by rule, with
+                             no per-box list. An unreadable directory
+                             stays in (its origin cannot be read), and a
+                             repo named on the command line is surveyed
+                             whatever its origin
     expect <name> <state>    <name> is DECLARED unreadable or absent:
                              reported, marked (expected), and does not
                              fail the run. Any other state is a loud

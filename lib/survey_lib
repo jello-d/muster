@@ -272,6 +272,10 @@ survey_record() {
 #   repo <name> [<path>]     declare the set explicitly; any `repo` line
 #                            turns discovery OFF. path defaults to root/name
 #   deployed <name> <path>   the deployed clone of <name> (the third head)
+#   origin <glob>            discovery takes only repos whose origin URL
+#                            matches one of these (e.g. *jello-d/*), so a
+#                            third-party clone in the root is left out by
+#                            RULE, with no per-box list to maintain
 #   expect <name> <state>    <name> is DECLARED to be in <state>, one of
 #                            unreadable or absent: reported, and does not
 #                            fail the run; any OTHER state is a loud
@@ -322,6 +326,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
     case $_k_kw in
       ''|'#'*) continue ;;
       root) [ -n "$_k_a" ] && continue ;;
+      origin) [ -n "$_k_a" ] && [ -z "$_k_b" ] && continue ;;
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
       profile) _sv_cfg_profile "$_k_a" "$_k_b" && continue ;;
@@ -369,12 +374,39 @@ _sv_one() {   # <name>: resolve its path and deployed clone, emit the record
 # Discovery: every directory one level under the root that is a repo, AND
 # every one that cannot be looked into, because "is it a repo?" has no
 # answer there and leaving it out would report it as absent (R4).
+#
+# With `origin` globs declared, a READABLE repo must also have an origin
+# URL matching one. An unreadable one stays in: its origin cannot be read,
+# so whether it belongs is exactly the question that has no answer.
 _sv_discover() {
+  _s_globs=$(_sv_cfg_all origin)
   for _s_d in "$SV_ROOT"/*; do
     [ -d "$_s_d" ] || continue
     if [ -x "$_s_d" ] && [ ! -e "$_s_d/.git" ]; then continue; fi
+    if [ -n "$_s_globs" ] && [ "$(_sv_where "$_s_d")" = repo ]; then
+      _sv_origin_ok "$_s_d" "$_s_globs" || continue
+    fi
     _sv_one "${_s_d##*/}"
   done
+}
+
+_sv_origin_ok() {   # <repo> <globs, one per line>
+  _g_url=$(_sv_git "$1" config --get remote.origin.url 2>/dev/null) \
+    || return 1
+  while IFS= read -r _g_glob; do
+    # shellcheck disable=SC2254  # the glob is the point
+    case $_g_url in $_g_glob) return 0 ;; esac
+  done <<GLOBS
+$2
+GLOBS
+  return 1
+}
+
+_sv_cfg_all() {   # <directive>: every value it is given, one per line
+  [ -e "$SV_CONFIG" ] || return 0
+  while read -r _c_kw _c_a _c_b || [ -n "$_c_kw" ]; do
+    if [ "$_c_kw" = "$1" ]; then printf '%s\n' "$_c_a"; fi
+  done < "$SV_CONFIG"
 }
 
 _sv_resolve() { (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P); }
