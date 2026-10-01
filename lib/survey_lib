@@ -287,6 +287,12 @@ survey_record() {
 #                            timers, the integrator's own scheduler, or
 #                            nobody (on demand). The intent check squares
 #                            against
+#   notify <command>         the notifier each run's state goes to (the
+#                            fleet's flag/clear protocol). A FACT, so it
+#                            lives here: kept only in an integrator's
+#                            environment, every check run from any other
+#                            shell computed a different unit and called
+#                            it drift. $MUSTER_NOTIFY still overrides
 #   profile <name> <verb> <interval> [driver=<d>] [<selector>...]
 #                            a policy over a set of repos (see run_lib):
 #                            verb is survey, owed or catch-up; interval
@@ -360,7 +366,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
   [ -e "$SV_CONFIG" ] || return 0
   [ -r "$SV_CONFIG" ] \
     || { echo "muster: cannot read config $SV_CONFIG" >&2; return 1; }
-  _k_n=0 _k_drv=0
+  _k_n=0 _k_drv=0 _k_ntf=0
   while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     _k_n=$((_k_n + 1))
     case $_k_kw in
@@ -370,6 +376,9 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
       profile) _sv_cfg_profile "$_k_a" "$_k_b" && continue ;;
+      notify)
+        _k_ntf=$((${_k_ntf:-0} + 1))
+        [ -n "$_k_a" ] && [ -z "$_k_b" ] && [ "$_k_ntf" = 1 ] && continue ;;
       driver)
         _k_drv=$((${_k_drv:-0} + 1))
         _sv_cfg_driver "$_k_a" && [ -z "$_k_b" ] && [ "$_k_drv" = 1 ] \

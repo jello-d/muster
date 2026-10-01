@@ -166,6 +166,34 @@ assert "the refusal names them" has "$ERR" "a b one"
 assert "nothing was written for them" test ! -e "$UNITS/muster-b.timer"
 MUSTER_CONFIG=$C/two cli schedule install
 
+# The notifier as a CONFIG fact: install bakes it, and a check from a
+# shell with no MUSTER_NOTIFY computes the same unit (no false drift).
+printf 'profile watch owed 1h\nnotify notify-me\n' > "$C/ntf"
+MUSTER_CONFIG=$C/ntf cli schedule install
+expect_rc 0 "install with the notifier declared in the config"
+assert "the config's notifier is baked, absolute" \
+  has "$(cat "$UNITS/muster-watch.service")" \
+  "Environment=\"MUSTER_NOTIFY=$_T/stub/notify-me\""
+(unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/ntf "$MUSTER" schedule check) \
+  >"$_T/ck" 2>&1
+_rc=$?
+assert "check from a plain shell: no false drift" test "$_rc" = 0
+assert "check from a plain shell: says ok" has "$(cat "$_T/ck")" "ok"
+printf '#!/bin/sh\nexit 0\n' > "$_T/stub/other-notify"
+chmod +x "$_T/stub/other-notify"
+MUSTER_NOTIFY=other-notify MUSTER_CONFIG=$C/ntf cli schedule install
+assert "MUSTER_NOTIFY overrides the config" \
+  has "$(cat "$UNITS/muster-watch.service")" "MUSTER_NOTIFY=$_T/stub/other"
+for _bad in 'notify a b' 'notify'; do
+  printf 'profile watch owed 1h\n%s\n' "$_bad" > "$C/nbad"
+  MUSTER_CONFIG=$C/nbad cli schedule check
+  expect_rc 2 "invalid notify line: $_bad"
+done
+printf 'notify a\nnotify b\n' > "$C/nbad"
+MUSTER_CONFIG=$C/nbad cli schedule check
+expect_rc 2 "two notify lines"
+MUSTER_CONFIG=$C/two cli schedule install
+
 # === remove =================================================================
 cli schedule remove
 expect_rc 0 "remove"

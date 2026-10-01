@@ -209,11 +209,20 @@ _rn_store() {
 # CONFIGURED BUT ABSENT IS SAID, never a silent no-op: box A had a
 # notifier baked into charon's units and missing from their PATH, and
 # every fault reached nobody (charon-sync, notify()).
+# run_notifier: the notifier, from $MUSTER_NOTIFY (what a unit bakes, or an
+# override) else the config's `notify` line. Empty when neither is set.
+run_notifier() {
+  if [ -n "${MUSTER_NOTIFY:-}" ]; then printf '%s' "$MUSTER_NOTIFY"
+  else _sv_cfg_all notify | head -n 1
+  fi
+}
+
 _rn_notify() {
-  [ -n "${MUSTER_NOTIFY:-}" ] || return 0
-  if ! command -v "$MUSTER_NOTIFY" >/dev/null 2>&1; then
-    echo "muster: MUSTER_NOTIFY='$MUSTER_NOTIFY' is not on PATH; this" \
-      "run's state will NOT reach it" >&2
+  _n_cmd=$(run_notifier)
+  [ -n "$_n_cmd" ] || return 0
+  if ! command -v "$_n_cmd" >/dev/null 2>&1; then
+    echo "muster: notifier '$_n_cmd' is not on PATH; this run's state" \
+      "will NOT reach it" >&2
     return 0
   fi
   _n_now=$(_rn_flagged "$RN_VERB" "$2/latest.records")
@@ -229,9 +238,9 @@ _rn_notify() {
     set -- "$1" clear
   fi
   _n_p=$1; _n_verb=$2; shift 2
-  "$MUSTER_NOTIFY" "$_n_verb" "muster-$_n_p" ${1+"$*"} \
+  "$_n_cmd" "$_n_verb" "muster-$_n_p" ${1+"$*"} \
     >/dev/null 2>&1 </dev/null \
-    || echo "muster: notifier $MUSTER_NOTIFY $_n_verb failed" >&2
+    || echo "muster: notifier $_n_cmd $_n_verb failed" >&2
 }
 
 # _rn_invoke <profile>: the verb, over the profile's selection. A run that

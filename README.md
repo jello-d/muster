@@ -172,6 +172,7 @@ A profile is a POLICY OVER A SET OF REPOS: a verb, how often, and
 which repos.
 
     driver <systemd|external|manual>
+    notify <command>
     profile <name> <verb> <interval> [driver=<d>] [<selector>...]
         verb       survey, owed or catch-up
         interval   30m, 2h, 1d; or - for a manual profile
@@ -215,7 +216,8 @@ than twice its interval, so whatever should run it has stopped). Below
 that, each profile's rows that need attention, drawn by the verb's own
 renderer. Exit 0 only when every profile is `ok`.
 
-`MUSTER_NOTIFY`, if set, gets each run's STATE in the fleet's notifier
+The notifier (`notify <command>` in the config, or `$MUSTER_NOTIFY`,
+which overrides it) gets each run's STATE in the fleet's notifier
 protocol (intervention-required's, which charon also speaks):
 `flag muster-<profile> "<message>"` while rows need attention or the run
 could not run, `clear muster-<profile>` once none do. A flag is a

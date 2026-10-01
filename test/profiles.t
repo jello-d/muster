@@ -243,6 +243,12 @@ MUSTER_ROOT=$_T/nowhere MUSTER_CONFIG=$C/p MUSTER_NOTIFY=$_T/notifier \
   "$MUSTER" run p >/dev/null 2>&1
 assert "a run that could not run is flagged" \
   starts "$(nlast)" "flag muster-p muster p could not run (exit 2)"
+# The notifier declared in the CONFIG, no environment: still reached.
+printf 'profile n owed 1h\nrepo one\nrepo nmoved\nnotify %s\n' \
+  "$_T/notifier" > "$C/ncfg"
+(unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/ncfg "$MUSTER" run n) >/dev/null 2>&1
+assert "a config-declared notifier gets the run's state" \
+  test "$(nlast)" = "clear muster-n"
 # Configured but absent: said, never a silent no-op.
 MUSTER_CONFIG=$C/n MUSTER_NOTIFY=no-such-notifier cli run n
 assert "an absent notifier is reported" has "$ERR" "is not on PATH"

@@ -45,7 +45,9 @@ _sc_service() {
   printf '[Service]\nType=oneshot\nExecStart=%s run %s\n' "$_v_bin" "$1"
   printf 'Environment=%s\n' "$_v_cfg"
   for _v_k in MUSTER_ROOT MUSTER_STATE_DIR MUSTER_NOTIFY MUSTER_KEEP; do
-    eval "_v_v=\${$_v_k:-}"
+    if [ "$_v_k" = MUSTER_NOTIFY ]; then _v_v=$(run_notifier)
+    else eval "_v_v=\${$_v_k:-}"
+    fi
     [ -n "$_v_v" ] || continue
     # The notifier is baked as an ABSOLUTE path: a unit's PATH is not the
     # installing shell's, and a name that resolves here and not there is
@@ -54,7 +56,7 @@ _sc_service() {
       _v_v=$(command -v "$_v_v" 2>/dev/null) || _v_v=
       case $_v_v in
         /*) ;;
-        *) echo "muster: MUSTER_NOTIFY='$MUSTER_NOTIFY' does not resolve" \
+        *) echo "muster: notifier '$(run_notifier)' does not resolve" \
              "to a command; refusing to bake it into a unit" >&2
            return 1 ;;
       esac
