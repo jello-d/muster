@@ -125,7 +125,11 @@ A vendored copy that differs while origin ALREADY carries the canonical
 is a pull, never a re-seed, because re-seeding would commit what the
 remote already has. And a canonical whose own checkout is dirty, ahead,
 behind or unfetchable is not trusted: every copy of it reads `unknown`,
-with a warning naming it.
+with a warning naming it. One problem gets one row: when the canonical's
+repo is in the same run, ITS row owes the fix (usually a pull) and the
+copies' `unknown` does not count against their repos; only when nothing
+else would show it (the canonical is missing, or its repo is not in the
+run) does an unknown copy make its repo `unknown`.
 
 Record: `name owed state ahead behind fetched overlap artifacts path`,
 with `artifacts` a comma list of `<relpath>:<verdict>`.

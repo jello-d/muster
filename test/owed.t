@@ -319,6 +319,9 @@ expect adopted artifacts .githooks/pre-commit:reseed
 canon_untrusted() {   # <description>: vmatch must read unknown
   art vmatch
   expect vmatch artifacts test/conv.t:unknown
+  # The canonical's repo is NOT in this run, so no other row would say
+  # anything: the copy's unknown must roll up and fail the run.
+  expect vmatch owed unknown
   assert "$1: stderr says the canonical is not trusted" \
     has "$ERR" "canonical $CANON is"
 }
@@ -334,11 +337,22 @@ git clone -q "$_T/origins/notes.git" "$_T/other/notes" 2>/dev/null
 commit_file "$_T/other/notes" _conv "# v4, from the other box" v4
 g "$_T/other/notes" push
 canon_untrusted "canonical behind its origin"
+# ONE PROBLEM, ONE ROW: with the canonical's repo IN the run, its own row
+# owes the pull, and the copies say unknown without rolling it up (16
+# rows reading unknown for one stale checkout, measured live 2026-10-01).
+art notes vmatch
+expect notes owed pull
+expect vmatch artifacts test/conv.t:unknown
+expect vmatch owed nothing
+assert "one stale canonical, exactly one row needs attention" \
+  test "$(printf '%s\n' "$OUT" | grep -vc 'owed=nothing')" = 1
+assert "the warning still names the canonical" has "$ERR" "canonical $CANON"
 g "$ROOT/notes" pull --ff-only
 
 printf 'artifact %s/nope test/conv.t\n' "$ROOT/notes" > "$C/missing"
 MUSTER_CONFIG=$C/missing owed vmatch
 expect vmatch artifacts test/conv.t:unknown
+expect vmatch owed unknown
 
 # An unrelated dirty file in the canonical repo does not taint it.
 echo scratch > "$ROOT/notes/scratch"

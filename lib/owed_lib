@@ -121,19 +121,38 @@ _ow_canon_status() {
   fi
 }
 
-# _ow_canon_load: every `artifact` line, with its canonical's status, into
-# OW_ARTLIST as "<status> <canonical> <relpath>..." lines. Once per run.
+# _ow_canon_load [name...]: every `artifact` line, with its canonical's
+# status and whether an unknown copy should ROLL UP, into OW_ARTLIST as
+# "<status> <roll:y|n> <canonical> <relpath>..." lines. Once per run.
+#
+# ONE PROBLEM, ONE ROW. A canonical whose checkout is behind (the normal
+# state of a notes repo that moves all day) makes every copy of it
+# unjudgeable, and rolling that up made 16 repos read `unknown` when the
+# only thing owed was one pull, measured live 2026-10-01; scheduled, that
+# is 17 alerts for one fact. When the canonical's repo is IN THE SET its
+# own row already carries the problem (pull, push, skip), so the copies
+# say `:unknown` and do not roll up. When nothing else would show it (the
+# canonical is missing, outside any repo, or its repo is not in the
+# set), they do.
 _ow_canon_load() {
   OW_ARTLIST=
   [ -e "$SV_CONFIG" ] || return 0
+  _l_set=$(SV_RECORD_FN=_sv_path_only survey_records "$@")
   while read -r _l_kw _l_canon _l_rels || [ -n "$_l_kw" ]; do
     [ "$_l_kw" = artifact ] || continue
     _l_canon=$(_sv_tilde "$_l_canon")
     _l_st=$(_ow_canon_status "$_l_canon")
+    _l_roll=y
+    if _l_top=$(git -C "$(dirname -- "$_l_canon")" rev-parse \
+        --show-toplevel 2>/dev/null) \
+      && printf '%s\n' "$_l_set" \
+        | grep -qxF -- "$(_sv_esc "$(_sv_resolve "$_l_top")")"; then
+      _l_roll=n
+    fi
     [ "$_l_st" = ok ] || printf '%s %s %s\n' "muster: canonical" \
       "$_l_canon is $_l_st, so its copies are unknown rather than judged" \
       "against it" >&2
-    OW_ARTLIST="$OW_ARTLIST$_l_st $_l_canon $_l_rels
+    OW_ARTLIST="$OW_ARTLIST$_l_st $_l_roll $_l_canon $_l_rels
 "
   done < "$SV_CONFIG"
 }
@@ -187,13 +206,16 @@ _ow_optin() {
 # A pull verdict does not roll up: the git half already says pull.
 _ow_artifacts() {
   OW_ARTS=
-  while read -r _a_st _a_canon _a_rels; do
+  while read -r _a_st _a_roll _a_canon _a_rels; do
     [ -n "$_a_st" ] || continue
     # shellcheck disable=SC2086  # relpaths are words, split on purpose
     _a_rel=$(_ow_optin "$1" $_a_rels) || continue
     _a_v=$(_ow_art_verdict "$1" "$_a_rel" "$_a_canon" "$_a_st")
     OW_ARTS="${OW_ARTS:+$OW_ARTS,}$_a_rel:$_a_v"
-    case $_a_v in reseed|skip|unknown) _ow_add "$_a_v" ;; esac
+    case $_a_v in
+      reseed|skip) _ow_add "$_a_v" ;;
+      unknown) [ "$_a_roll" = n ] || _ow_add unknown ;;
+    esac
   done <<ARTS
 $OW_ARTLIST
 ARTS
@@ -297,7 +319,7 @@ owed_main() {
     shift
   done
   survey_setup "$@" || return 2
-  _ow_canon_load
+  _ow_canon_load "$@"
   _m_out=$(SV_RECORD_FN=owed_record survey_records "$@") \
     || { echo "muster: owed itself failed" >&2; return 2; }
   [ -n "$_m_out" ] \

@@ -377,6 +377,13 @@ _sv_discover() {
   done
 }
 
+_sv_resolve() { (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P); }
+
+# _sv_path_only: a record function that prints only the repo's resolved,
+# percent-encoded path, so a verb can ask "is this repo in the set?"
+# by walking the set exactly as the records will.
+_sv_path_only() { _sv_esc "$(_sv_resolve "$2")"; echo; }
+
 # survey_records [name...]: the records. Named repos, else the declared
 # set, else discovery.
 survey_records() {
