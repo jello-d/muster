@@ -6,93 +6,9 @@
 # Prints `ok   survey (N checks)` or `FAIL survey:` and every failure.
 set -u
 
-HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) \
-  || { echo "FAIL survey: cannot find test/"; exit 1; }
-MUSTER=$HERE/../bin/muster
-
-# --- scratch, with the literal baked into the trap ---------------------------
-# The house rule: an rm -rf never runs on a deferred expansion. mktemp's
-# answer is CHECKED, then written into the trap as a literal.
-_T=$(mktemp -d "${TMPDIR:-/tmp}/muster-survey.XXXXXX") || _T=
-case $_T in
-  ''|*\'*) echo "FAIL survey: unusable scratch dir [$_T]"; exit 1 ;;
-esac
-[ -d "$_T" ] && [ "$_T" != "$PWD" ] && [ "$_T" != / ] \
-  || { echo "FAIL survey: refusing [$_T] as scratch"; exit 1; }
-# chmod first: the unreadable fixtures would otherwise survive the rm.
-# shellcheck disable=SC2064  # EXPANDING NOW IS THE POINT: see above.
-trap "chmod -R u+rwx '$_T' 2>/dev/null; rm -rf '$_T'" EXIT
-
-# --- an environment that is the test's own -----------------------------------
-# The user's global git config carries a hooksPath, and the user's HOME
-# carries a real muster config; neither may leak into a fixture.
-export HOME="$_T/home"
-export GIT_CONFIG_GLOBAL="$_T/gitconfig" GIT_CONFIG_NOSYSTEM=1
-export MUSTER_CONFIG="$_T/no-config" MUSTER_ROOT="$_T/src"
-unset XDG_CONFIG_HOME GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
-mkdir -p "$HOME" "$_T/src" "$_T/origins" "$_T/other"
-cat > "$GIT_CONFIG_GLOBAL" <<'EOF'
-[user]
-  name = muster test
-  email = test@example.invalid
-[init]
-  defaultBranch = main
-[advice]
-  detachedHead = false
-EOF
-ROOT=$_T/src
-
-# --- harness -----------------------------------------------------------------
-N=0 FAILS=''
-fail() { FAILS="$FAILS
-  $1"; }
-# assert <description> <command...>: one check, passes when command does
-assert() {
-  N=$((N + 1))
-  _a_d=$1; shift
-  "$@" || fail "$_a_d"
-}
-# survey [args...]: run it, porcelain, into OUT / ERR / RC
-survey() {
-  OUT=$("$MUSTER" survey --porcelain "$@" 2>"$_T/err" </dev/null)
-  RC=$?
-  ERR=$(cat "$_T/err")
-}
-rec() { printf '%s\n' "$OUT" | awk -v n="name=$1" '$1 == n'; }
-field() { rec "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }
-# expect <name> <key> <want>: one check on one field of one record
-expect() {
-  N=$((N + 1))
-  _x_got=$(field "$1" "$2")
-  [ "$_x_got" = "$3" ] || fail "$1: $2=[$_x_got], want [$3] (rc=$RC)"
-}
-expect_rc() {   # <want> <context>
-  N=$((N + 1))
-  [ "$RC" = "$1" ] || fail "$2: exit $RC, want $1 (stderr: $ERR)"
-}
-has() { case $1 in *"$2"*) return 0 ;; esac; return 1; }
-starts() { case $1 in "$2"*) return 0 ;; esac; return 1; }
-g() { _g_r=$1; shift; git -C "$_g_r" "$@" >/dev/null 2>&1; }
-
-# mkrepo <name>: a clone of its own bare origin, one commit, tracking it.
-mkrepo() {
-  git init -q --bare "$_T/origins/$1.git"
-  git clone -q "$_T/origins/$1.git" "$ROOT/$1" 2>/dev/null
-  echo one > "$ROOT/$1/f"
-  g "$ROOT/$1" add f
-  g "$ROOT/$1" commit -m one
-  g "$ROOT/$1" push -u origin main
-}
-# upstream_moves <name>: another clone pushes a commit; this one has not
-# fetched it.
-upstream_moves() {
-  [ -d "$_T/other/$1" ] \
-    || git clone -q "$_T/origins/$1.git" "$_T/other/$1" 2>/dev/null
-  g "$_T/other/$1" pull
-  echo "x$(date +%s)$N" >> "$_T/other/$1/f"
-  g "$_T/other/$1" commit -am more
-  g "$_T/other/$1" push
-}
+H_NAME=survey
+# shellcheck source=SCRIPTDIR/harness_lib
+. "$(dirname -- "$0")/harness_lib"
 
 # === states of a single repo =================================================
 
@@ -653,12 +569,4 @@ cp "$MUSTER" "$_T/orphan/bin/muster"
 "$_T/orphan/bin/muster" survey >/dev/null 2>&1
 assert "lib/ missing: exit 2, not a crash mid-run" test "$?" = 2
 
-# === verdict =================================================================
-# A run that made no checks is not a pass: the count is DERIVED, and zero
-# means the file stopped somewhere above without saying so.
-[ "$N" -gt 0 ] || fail "no checks ran"
-if [ -n "$FAILS" ]; then
-  printf 'FAIL survey (%s checks):%s\n' "$N" "$FAILS"
-  exit 1
-fi
-printf 'ok   survey (%s checks)\n' "$N"
+h_verdict
