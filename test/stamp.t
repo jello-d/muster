@@ -135,19 +135,37 @@ if [ -n "$CAN_LOCK" ]; then
   expect three verdict gone
   chmod 755 "$ROOT/three"
 fi
+# A NAMED repo that is not there is a typo: stamping it would record
+# "absent", and the check would answer holds forever, guarding nothing.
 take s7 nosuch
-chk s7
-expect nosuch verdict holds
-assert "an absent repo stamped absent still holds" test "$RC" = 0
-# A repo appearing where none was has MOVED, even an empty one whose HEAD
-# is as unset as the absent one's was.
-take s7c nosuch2
-git init -q "$ROOT/nosuch"
-chk s7
-expect nosuch verdict moved
-mkrepo nosuch2
+expect_rc 2 "stamping a name that is not a repo is refused"
+assert "the refusal says why" has "$(cat "$_T/err")" "refusing to stamp"
+assert "and writes no stamp" test ! -s "$ST/s7"
+mkdir "$ROOT/plaindir"
+take s7 plaindir
+expect_rc 2 "stamping a directory that is not a repo is refused"
+take s7 one nosuch
+expect_rc 2 "one bad name among good ones refuses the whole stamp"
+# Stamped while UNREADABLE (it is there, so it may be stamped), then
+# readable: the stamp described a tree nobody could look at, so whatever
+# is visible now is not what was recorded, even an empty repo.
+if [ -n "$CAN_LOCK" ]; then
+  git init -q "$ROOT/sealed"
+  chmod 000 "$ROOT/sealed"
+  take s7d sealed
+  expect_rc 0 "an unreadable repo may be stamped: it is there"
+  chmod 755 "$ROOT/sealed"
+  chk s7d
+  expect sealed verdict moved
+fi
+# A repo that vanishes and comes back EMPTY has moved, even though its
+# HEAD is as unset as an absent one's: the stamp recorded a real commit.
+mkrepo ghost
+take s7c ghost
+mv "$ROOT/ghost" "$_T/ghost-was"
+git init -q "$ROOT/ghost"
 chk s7c
-expect nosuch2 verdict moved
+expect ghost verdict moved
 # A file whose name starts with a dash is still part of the tree.
 take s7b one
 echo x > "$ROOT/one/-dashed"

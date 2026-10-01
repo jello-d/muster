@@ -289,8 +289,14 @@ their contents), and the upstream head. The check answers per repo:
 
 Exit 0 when every repo holds, 1 when any does not, 2 when the stamp is
 empty, missing or not a stamp: an unusable stamp never reads as "all
-holds". The stamp carries its own paths, so it is checked against the
-tree it named whatever the config says later. Both are read-only.
+holds". For the same reason `stamp` refuses a NAMED repo that is not
+there: a typo would record "absent", and its check would hold forever,
+guarding nothing. With no names it stamps the whole set, which can only
+void more often, never less. An untracked scratch file left in a
+checkout voids its stamp: the gate runs against the working tree, so
+that is the stamp working, not a false alarm. The stamp carries its own
+paths, so it is checked against the tree it named whatever the config
+says later. Both are read-only.
 
 ### schedule
 

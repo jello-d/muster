@@ -218,6 +218,21 @@ stamp_main() {
     shift
   done
   survey_setup "$@" || return 2
+  # A NAMED REPO THAT IS NOT THERE IS A TYPO, NOT A STATE TO RECORD. mux
+  # pointed at the shape (2026-10-01): `muster stamp muxx` would record
+  # muxx as absent, the check after a 35-minute gate would find it still
+  # absent and answer holds, and a release would pass guarded by nothing.
+  # So stamping a name that resolves to no repo is refused. Unreadable is
+  # still stamped: it is there, and that is a fact about it.
+  for _s_n in "$@"; do
+    _s_p=$(_sv_cfg repo "$_s_n") || _s_p=$SV_ROOT/$_s_n
+    case $(_sv_where "$_s_p") in
+      absent|not-a-repo)
+        echo "muster: $_s_n is not a repo here ($_s_p); refusing to stamp" \
+          "nothing, since its check would always hold" >&2
+        return 2 ;;
+    esac
+  done
   ST_TAKEN=$(date +%s)
   _s_out=$(SV_RECORD_FN=stamp_record survey_records "$@") \
     || { echo "muster: the stamp itself failed" >&2; return 2; }
