@@ -404,6 +404,41 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1
   done < "$SV_CONFIG"
+  # Two `place` roots with the SAME destination: which owns a file there
+  # is ambiguous, so the config is refused (nesting is fine: the most
+  # specific root owns its subtree).
+  _k_dup=$(while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
+    if [ "$_k_kw" = place ]; then
+      # shellcheck disable=SC2086  # two words
+      set -- $_k_b
+      _sv_tilde "$1"; echo
+    fi
+  done < "$SV_CONFIG" | sed 's|/*$||' | sort | uniq -d | head -n 1)
+  [ -z "$_k_dup" ] || { echo "muster: two place roots share the" \
+    "destination $_k_dup; give each its own (nesting is allowed)" >&2
+    return 1; }
+  _sv_cfg_policies
+}
+
+# _sv_cfg_policies: a `policy` line must be able to take effect. One
+# naming a path under no `place` root, or a second line for the same
+# path, would be a decision recorded that silently does nothing, or does
+# one of two things; both are refused.
+_sv_cfg_policies() {
+  _k_pol=$(while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
+    if [ "$_k_kw" = policy ]; then _sv_tilde "$_k_a"; echo; fi
+  done < "$SV_CONFIG")
+  [ -n "$_k_pol" ] || return 0
+  _k_twice=$(printf '%s\n' "$_k_pol" | sort | uniq -d | head -n 1)
+  [ -z "$_k_twice" ] || { echo "muster: two policy lines for $_k_twice" >&2
+    return 1; }
+  _k_roots=$(_pl_roots | awk '{ print $2 }')
+  _k_orph=$(printf '%s\n' "$_k_pol" | while IFS= read -r _k_p; do
+    printf '%s\n' "$_k_roots" | awk -v p="$_k_p" '
+      index(p, $0 "/") == 1 { f = 1 } END { exit !f }' || echo "$_k_p"
+  done | head -n 1)
+  [ -z "$_k_orph" ] || { echo "muster: policy for $_k_orph, which is" \
+    "under no place root, so it would never apply" >&2; return 1; }
 }
 
 # A LISTING (repo or deployed, no name) succeeds even when empty; a lookup

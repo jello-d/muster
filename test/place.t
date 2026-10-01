@@ -452,6 +452,49 @@ assert "a stray temp in the mirror is not a baseline" \
   test -z "$(vd "$DST/app/.a.conf.muster-tmp.999")"
 rm -f "$MIR/app/.a.conf.muster-tmp.999"
 
+# === nested roots: the most specific owns its subtree (P9) ===================
+# The integrator's plan: an app-owned root placing INTO ~/.config beside
+# the user-editable one. Without longest-prefix ownership, the outer root
+# read the inner root's placed files as its own orphans, and deleted them.
+# Named to sort AFTER the outer source (link/...), so `where` must choose
+# the most specific root deliberately, not by alphabetical luck.
+IA=$TK/zz-appconf
+mkdir -p "$IA"
+echo '{"app": 1}' > "$IA/settings.json"
+g "$TK" add -A; g "$TK" commit -m appconf2
+# Declared WITH a trailing slash: roots must normalise, or the outer root
+# fails to see this one as inner and takes its files for orphans.
+printf 'place %s %s/apps/code/ app-owned\n' "$IA" "$DST" >> "$MUSTER_CONFIG"
+act place
+assert "nested: the inner root placed its file" \
+  test -f "$DST/apps/code/settings.json"
+pl
+expv "$DST/apps/code/settings.json" app-held
+act place
+assert "nested: the OUTER root did not take it as an orphan" \
+  test -f "$DST/apps/code/settings.json"
+OUT=$("$MUSTER" where "$DST/apps/code/settings.json" 2>&1)
+assert "where: answered by the most specific root, and only it" \
+  test "$OUT" = "$DST/apps/code/settings.json <- $IA/settings.json (app-owned)"
+# The outer SOURCE also carrying a file in the inner root's territory.
+mkdir -p "$SRC/apps/code"
+echo 'outer' > "$SRC/apps/code/stray.json"
+g "$TK" add -A; g "$TK" commit -m stray
+pl
+expv "$DST/apps/code/stray.json" shadowed
+act place
+assert "shadowed: never placed by the outer root" \
+  test ! -e "$DST/apps/code/stray.json"
+OUT=$("$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a shadowed source is a FAULT"
+g "$TK" rm -q -r link/config/apps; g "$TK" commit -m unstray
+# Two roots with the SAME destination: ambiguous, refused.
+printf 'place %s %s/ app-owned\n' "$IA" "$DST/apps/code" > "$_T/dupcfg"
+printf 'place %s %s app-owned\n' "$AS" "$DST/apps/code" >> "$_T/dupcfg"
+OUT=$(MUSTER_CONFIG=$_T/dupcfg "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "two roots sharing a destination (one with a trailing /)"
+assert "and it says which" has "$OUT" "share the destination $DST/apps/code"
+
 # === where, dry-run, path filters, config =====================================
 OUT=$("$MUSTER" where "$DST/app/a.conf" 2>&1); RC=$?
 expect_rc 0 "where: a destination"
@@ -471,6 +514,15 @@ assert "a named path: placed" same "$SRC/app/b.conf" "$DST/app/b.conf"
 assert "an unnamed path: untouched" test "$(cat "$DST/app/a.conf")" != dry
 g "$TK" checkout -- link/config
 act place
+printf 'place %s %s user-editable\npolicy /elsewhere/x repo-owned\n' \
+  "$SRC" "$DST" > "$_T/badcfg"
+OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "a policy for a path under no root would never apply: refused"
+assert "and says so" has "$OUT" "under no place root"
+printf 'place %s %s user-editable\npolicy %s/a repo-owned\npolicy %s/a %s\n' \
+  "$SRC" "$DST" "$DST" "$DST" app-owned > "$_T/badcfg"
+OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "two policy lines for one path: refused"
 for _bad in 'place a b c d' 'place a b nope' 'policy x nope' 'place a'; do
   printf '%s\n' "$_bad" > "$_T/badcfg"
   OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?

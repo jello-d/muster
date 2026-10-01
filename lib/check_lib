@@ -151,6 +151,8 @@ _ck_placement() {
       in-sync|app-held|unmanaged) ;;
       new|missing|place|converged|migrate|displace|orphan)
         _ck_add drift "place      $_g_v $_g_p" ;;
+      shadowed) _ck_add fault "place      shadowed $_g_p: a more specific" \
+        "root owns this path; remove it from one of the two sources" ;;
       merge-back) _ck_add fault "merge-back $_g_p: a live edit not yet" \
         "in the source; review it, then muster merge-back" ;;
       linked-dir) _ck_add note "place      linked-dir $_g_p: under a" \

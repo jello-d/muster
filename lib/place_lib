@@ -37,6 +37,9 @@
 #   conflict    both edited differently (user-editable), or live exists
 #               unplaced and differs from source: a human decides
 #   foreign     live is a symlink pointing anywhere but its source
+#   shadowed    a source file whose destination falls under a MORE
+#               SPECIFIC declared root: that root owns the path (P9's
+#               longest prefix), so this one never acts on it. A fault
 #   linked-dir  a directory between the destination root and the file is
 #               itself a symlink (the whole-directory link model): the live
 #               file IS some other file, so nothing here is acted on. The
@@ -73,7 +76,8 @@ _pl_roots() {
       printf '%s %s %s\n' "$(_sv_tilde "$_r_a")" "$(_sv_tilde "$_r_b")" \
         "$_r_c"
     fi
-  done < "$SV_CONFIG"
+  done < "$SV_CONFIG" | awk '{ sub(/\/+$/, "", $1); sub(/\/+$/, "", $2)
+    print }'   # one form for every root: no trailing slash
 }
 
 # _pl_policy <dest-path> <root-default>: the per-file override if one is
@@ -108,6 +112,30 @@ _pl_sources() {
   else
     (cd "$1" && find . -type f | sed 's|^\./||')
   fi
+}
+
+# _pl_inner <dest-root>: every OTHER declared destination root strictly
+# inside this one, one per line. A destination belongs to exactly one root,
+# the most specific (P9's longest prefix): without this, two roots both
+# placing under ~/.config each read the other's baselines as their own
+# files with no source, i.e. orphans, and `place` would have deleted them.
+_pl_inner() {
+  _pl_roots | while read -r _n_s _n_d _n_p; do
+    case $_n_d in "$1"/*) printf '%s\n' "$_n_d" ;; esac
+  done
+}
+
+_pl_owned_elsewhere() {   # <dest> <inner-roots>: under a more specific root?
+  [ -n "$2" ] || return 1
+  # The loop must FAIL when nothing matched: a while loop's status is its
+  # last command's, and a non-matching `case` succeeds (found by the
+  # tests: every file read as owned elsewhere).
+  printf '%s\n' "$2" | {
+    while IFS= read -r _o_r; do
+      case $1 in "$_o_r"/*) exit 0 ;; esac
+    done
+    exit 1
+  }
 }
 
 # _pl_baselines <dest-root>: every tracked destination under it, as a
@@ -242,9 +270,17 @@ placement_records() {
       _pl_record
       continue
     fi
+    _e_in=$(_pl_inner "$_e_dst")
     { _pl_sources "$_e_src"; _pl_baselines "$_e_dst"; } | sort -u \
       | while IFS= read -r _e_rel; do
           [ -n "$_e_rel" ] || continue
+          if _pl_owned_elsewhere "$_e_dst/$_e_rel" "$_e_in"; then
+            [ -f "$_e_src/$_e_rel" ] || continue   # the inner root's file
+            PL_D=$_e_dst/$_e_rel PL_S=$_e_src/$_e_rel PL_POL=$_e_pol
+            PL_V=shadowed
+            _pl_record
+            continue
+          fi
           _pl_verdict "$_e_src" "$_e_dst" "$_e_pol" "$_e_rel"
           if _pl_drift_verdict "$PL_V" && ! _pl_writable "$PL_D"; then
             PL_V=read-only
@@ -364,9 +400,12 @@ _pl_walk() {
       printf ' %s is placed or removed\n' "$_w_dst"
       continue
     fi
+    _w_in=$(_pl_inner "$_w_dst")
     { _pl_sources "$_w_src"; _pl_baselines "$_w_dst"; } | sort -u \
       | while IFS= read -r _w_rel; do
           [ -n "$_w_rel" ] || continue
+          # Owned by a more specific root: never this root's to act on.
+          ! _pl_owned_elsewhere "$_w_dst/$_w_rel" "$_w_in" || continue
           _pl_selected "$_w_dst/$_w_rel" "$@" || continue
           _pl_verdict "$_w_src" "$_w_dst" "$_w_pol" "$_w_rel"
           "$_w_fn"
@@ -458,7 +497,9 @@ where_main() {
   [ "$#" = 1 ] || { echo "usage: muster where <path>" >&2; return 2; }
   survey_config || return 2
   _h_p=$(_sv_tilde "$1")
-  _h_out=$(_pl_roots | while read -r _h_src _h_dst _h_pol; do
+  # Most specific root first, and only it answers (P9's longest prefix).
+  _h_out=$(_pl_roots | awk '{ print length($2), $0 }' | sort -rn \
+    | cut -d' ' -f2- | while read -r _h_src _h_dst _h_pol; do
     case $_h_p in
       "$_h_dst"/*) printf '%s <- %s (%s)\n' "$_h_p" \
         "$_h_src/${_h_p#"$_h_dst"/}" \
@@ -467,7 +508,7 @@ where_main() {
         "$_h_dst/${_h_p#"$_h_src"/}" \
         "$(_pl_policy "$_h_dst/${_h_p#"$_h_src"/}" "$_h_pol")" ;;
     esac
-  done)
+  done | head -n 1)
   [ -n "$_h_out" ] || { echo "muster: $_h_p is not under a declared root" >&2
     return 1; }
   printf '%s\n' "$_h_out"

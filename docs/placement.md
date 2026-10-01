@@ -338,11 +338,46 @@ into a git working tree.
   with no merge-back, since shipped code is never edited live.
 - NOT privileged. Root-owned destinations are reported only (P11).
 
+## The config format: FROZEN for the first increment (2026-10-01)
+
+What an integrator writes, and what it may rely on. Any change is
+ADDITIVE ONLY and agreed first through the integrator's requests file;
+nothing below changes meaning under a config that already parses.
+
+    place <source-root> <dest-root> <policy>
+    policy <dest-path> <policy>
+
+    <policy>   user-editable | repo-owned | app-owned
+
+- Paths are absolute or `~/`-relative, contain NO whitespace, and a
+  trailing `/` is ignored.
+- `<source-root>` is a directory. Inside a git work tree its source files
+  are the tracked ones plus new, unignored ones, read from the working
+  tree; gitignored files are never source. Outside git, every file.
+- `<dest-root>` is a directory, created as needed.
+- No two `place` lines may share a `<dest-root>` (ambiguous ownership).
+  Nesting is allowed: the MOST SPECIFIC root owns its subtree, and a
+  source file of an outer root that lands inside an inner root is
+  `shadowed` (a fault, never acted on).
+- `<dest-path>` names exactly one destination file, under some declared
+  `<dest-root>`. A `policy` line for a path under no root, or a second
+  `policy` line for the same path, is a config error: it could never
+  take effect, or could take one of two.
+- Any violation above is exit 2 for every verb (the config is invalid),
+  never a silently skipped line.
+
+The state the engine keeps lives under `$MUSTER_STATE_DIR` (default
+`~/.local/state/muster`): the baseline mirror at `root/`, kept edits at
+`displaced/`. The exits the integrator maps:
+
+    placed            0 all in sync   1 anything not   2 cannot run
+    place, merge-back 0 in sync after 1 something left 2 a write failed
+    check             0 / 1 drift / 3 fault / 2 invalid config
+
 ## Possible shape, non-binding
 
-- A config line per root pair, e.g.
-  `place <source-root> <destination-root> <user-editable|repo-owned|app-owned>`,
-  and one per exception, e.g. `policy <destination-path> repo-owned`.
+- (The config lines are no longer a possible shape: see the frozen
+  format above.)
 - Verbs from the problem: one that reports per-file verdicts (the
   placement analogue of `owed`), one that places, one that merges back,
   and `where <path>` for the resolver. Names to be settled.
