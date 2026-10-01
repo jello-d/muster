@@ -1,0 +1,20 @@
+#!/bin/sh
+# test/run - every test/*.t. A test that reaches no verdict is a FAILURE, and
+# it has to say WHICH: a run that neither passes nor explains itself is the
+# worst outcome, because the summary reads like a pass.
+set -u
+_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+_rc=0 _silent=
+for _t in "$_dir"/*.t; do
+  [ -f "$_t" ] || continue
+  _out=$(sh "$_t" 2>&1 </dev/null) || _rc=1
+  printf '%s\n' "$_out"
+  case $_out in
+  *ok*|*skip*|*FAIL*) ;;
+  *) _silent="$_silent ${_t##*/}"; _rc=1 ;;
+  esac
+done
+[ -z "$_silent" ] || printf 'NO VERDICT from:%s\n' "$_silent" >&2
+[ "$_rc" = 0 ] && printf 'all muster tests passed\n' \
+  || printf 'SOME TESTS FAILED\n' >&2
+exit "$_rc"
