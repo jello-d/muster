@@ -159,40 +159,46 @@ expect_rc 0 "a stale lock"
 assert "stale lock: says it took over" has "$ERR" "stale lock"
 assert "stale lock: released after" test ! -e "$S/p/lock"
 
-# === notify on CHANGE, not on every run =====================================
+# === notify: the fleet's flag/clear protocol, as STATE =======================
+# The stub speaks intervention-required's interface and logs each call.
 N_LOG=$_T/notified
 cat > "$_T/notifier" <<NOTIFIER
 #!/bin/sh
-printf '%s|%s\n' "\$1" "\$2" >> '$N_LOG'
+case \$1 in flag|clear) ;; *) exit 9 ;; esac
+printf '%s\n' "\$*" >> '$N_LOG'
 NOTIFIER
 chmod +x "$_T/notifier"
 printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' > "$C/n"
 mkrepo nmoved
 nrun() { MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/notifier cli run n; }
-nlines() { [ -f "$N_LOG" ] && wc -l < "$N_LOG" | tr -d ' ' || echo 0; }
+nlast() { tail -n 1 "$N_LOG" 2>/dev/null; }
 nrun
-assert "clean first run: no notification" test "$(nlines)" = 0
+assert "a clean run CLEARS its flag" test "$(nlast)" = "clear muster-n"
 upstream_moves nmoved
 nrun
-assert "a repo starts needing attention: notified" test "$(nlines)" = 1
-assert "the notification names the profile and the count" \
-  has "$(cat "$N_LOG")" "n|muster n: 1 repo(s) need attention"
+assert "attention FLAGS, naming the profile, count and repos" \
+  test "$(nlast)" = "flag muster-n muster n: 1 repo(s) need attention: nmoved"
 nrun
-assert "the same attention again: NOT notified" test "$(nlines)" = 1
-echo wip >> "$ROOT/nmoved/f"
-nrun
-assert "the verdict changed (pull to skip): notified" test "$(nlines)" = 2
-g "$ROOT/nmoved" checkout -- f
+assert "still needing attention: flagged again (idempotent state)" \
+  starts "$(nlast)" "flag muster-n"
 g "$ROOT/nmoved" pull --ff-only
 nrun
-assert "attention cleared: notified" test "$(nlines)" = 3
+assert "attention gone: cleared" test "$(nlast)" = "clear muster-n"
+# A run that could not run is flagged as such. Profile p declares no
+# repos, so a missing root stops its verb outright (exit 2).
+MUSTER_ROOT=$_T/nowhere MUSTER_CONFIG=$C/p MUSTER_NOTIFY=$_T/notifier \
+  "$MUSTER" run p >/dev/null 2>&1
+assert "a run that could not run is flagged" \
+  starts "$(nlast)" "flag muster-p muster p could not run (exit 2)"
+# Configured but absent: said, never a silent no-op.
+MUSTER_CONFIG=$C/n MUSTER_NOTIFY=no-such-notifier cli run n
+assert "an absent notifier is reported" has "$ERR" "is not on PATH"
+assert "an absent notifier does not lose the run" \
+  test -s "$S/n/latest.records"
 printf '#!/bin/sh\nexit 1\n' > "$_T/badnotifier"
 chmod +x "$_T/badnotifier"
-upstream_moves nmoved
 MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/badnotifier cli run n
 assert "a failing notifier is reported" has "$ERR" "notifier"
-assert "a failing notifier does not lose the run" \
-  has "$(cat "$S/n/latest.records")" "owed=pull"
 
 # === the command line =======================================================
 cli run

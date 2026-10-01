@@ -129,17 +129,40 @@ _rn_store() {
       done
 }
 
-# _rn_notify <profile> <dir> <previous-flagged>: call $MUSTER_NOTIFY only
-# when the set of rows needing attention CHANGED. A repo that stays
-# behind must not alert every interval, or the alerts get ignored.
+# _rn_notify <profile> <dir> <exit>: tell $MUSTER_NOTIFY the profile's
+# STATE, in the fleet's notifier protocol (intervention-required's, which
+# charon already speaks): `flag muster-<profile> "<message>"` while rows
+# need attention or the run could not run, `clear muster-<profile>` when
+# none do. State, not change: a flag is a standing fact that a login
+# banner shows once, so raising it again is idempotent rather than noisy,
+# and a notification that was lost corrects itself on the next run.
+#
+# CONFIGURED BUT ABSENT IS SAID, never a silent no-op: box A had a
+# notifier baked into charon's units and missing from their PATH, and
+# every fault reached nobody (charon-sync, notify()).
 _rn_notify() {
   [ -n "${MUSTER_NOTIFY:-}" ] || return 0
+  if ! command -v "$MUSTER_NOTIFY" >/dev/null 2>&1; then
+    echo "muster: MUSTER_NOTIFY='$MUSTER_NOTIFY' is not on PATH; this" \
+      "run's state will NOT reach it" >&2
+    return 0
+  fi
   _n_now=$(_rn_flagged "$RN_VERB" "$2/latest.records")
-  [ "$_n_now" != "$3" ] || return 0
   _n_count=$(printf '%s' "$_n_now" | grep -c . || :)
-  "$MUSTER_NOTIFY" "$1" "muster $1: $_n_count repo(s) need attention" \
+  _n_names=$(printf '%s\n' "$_n_now" | awk 'NF { printf "%s%s",
+    (n++ ? ", " : ""), $1 }')
+  if [ "$3" -ge 2 ]; then
+    set -- "$1" flag "muster $1 could not run (exit $3): muster report"
+  elif [ "$_n_count" -gt 0 ]; then
+    set -- "$1" flag "muster $1: $_n_count repo(s) need attention:" \
+      "$_n_names"
+  else
+    set -- "$1" clear
+  fi
+  _n_p=$1; _n_verb=$2; shift 2
+  "$MUSTER_NOTIFY" "$_n_verb" "muster-$_n_p" ${1+"$*"} \
     >/dev/null 2>&1 </dev/null \
-    || echo "muster: notifier $MUSTER_NOTIFY failed" >&2
+    || echo "muster: notifier $MUSTER_NOTIFY $_n_verb failed" >&2
 }
 
 # run_main <profile>: run it, store it, notify on change; exit as the verb.
@@ -166,9 +189,6 @@ run_main() {
   # shellcheck disable=SC2064  # expanding now is the point
   trap "rm -f '$_m_tmp.records' '$_m_tmp.err' '$_m_tmp.meta' \
     '$_m_dir/lock/pid'; rmdir '$_m_dir/lock' 2>/dev/null" EXIT
-  _m_prev=
-  [ ! -f "$_m_dir/latest.records" ] \
-    || _m_prev=$(_rn_flagged "$RN_VERB" "$_m_dir/latest.records")
   _m_start=$(date +%s)
   _m_rc=0
   "$MUSTER_BIN" "$RN_VERB" --porcelain >"$_m_tmp.records" \
@@ -178,7 +198,7 @@ run_main() {
   printf 'exit=%s\nhost=%s\n' "$_m_rc" "$(hostname 2>/dev/null || echo -)" \
     >>"$_m_tmp.meta"
   _rn_store "$_m_dir" "$_m_start-$$" "$_m_tmp"
-  _rn_notify "$1" "$_m_dir" "$_m_prev"
+  _rn_notify "$1" "$_m_dir" "$_m_rc"
   _rn_unlock "$_m_dir"
   trap - EXIT
   return "$_m_rc"

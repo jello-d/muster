@@ -191,9 +191,13 @@ than twice its interval, so whatever should run it has stopped). Below
 that, each profile's rows that need attention, drawn by the verb's own
 renderer. Exit 0 only when every profile is `ok`.
 
-`MUSTER_NOTIFY`, if set, is run as `$MUSTER_NOTIFY <profile> <message>`
-when a profile's set of rows needing attention CHANGES, not on every
-run, so a repo that stays behind does not alert every interval.
+`MUSTER_NOTIFY`, if set, gets each run's STATE in the fleet's notifier
+protocol (intervention-required's, which charon also speaks):
+`flag muster-<profile> "<message>"` while rows need attention or the run
+could not run, `clear muster-<profile>` once none do. A flag is a
+standing fact, so raising it again is idempotent, and a lost
+notification corrects itself on the next run. A notifier that is set but
+not on PATH is reported on stderr, never skipped in silence.
 
 ### schedule
 
@@ -203,7 +207,9 @@ generated, never hand-edited:
 
 - `install` writes each unit only if its content changed, bakes the
   config path (and `MUSTER_ROOT`, `MUSTER_STATE_DIR`, `MUSTER_NOTIFY`,
-  `MUSTER_KEEP` when set) into the service, removes units for profiles
+  `MUSTER_KEEP` when set) into the service, the notifier as an ABSOLUTE
+  path since a unit's PATH is not the installing shell's (one that does
+  not resolve is refused), removes units for profiles
   no longer declared, reloads the user manager and enables every timer.
 - `check` changes nothing and lists `missing`, `differs`, `disabled`,
   `inactive` and `orphan` units, exit 1 on any: an integrator's check

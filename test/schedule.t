@@ -169,6 +169,19 @@ printf 'profile we@b owed 1h\n' > "$C/at"
 MUSTER_CONFIG=$C/at cli schedule install
 expect_rc 2 "a profile name that would make a systemd template"
 
+# === the notifier is baked as an absolute path ==============================
+printf '#!/bin/sh\nexit 0\n' > "$_T/stub/notify-me"
+chmod +x "$_T/stub/notify-me"
+MUSTER_CONFIG=$C/two MUSTER_NOTIFY=notify-me cli schedule install
+expect_rc 0 "install with a notifier found on PATH"
+assert "the notifier is baked ABSOLUTE, not as a bare name" \
+  has "$(cat "$UNITS/muster-watch.service")" \
+  "Environment=\"MUSTER_NOTIFY=$_T/stub/notify-me\""
+MUSTER_CONFIG=$C/two MUSTER_NOTIFY=no-such-notifier cli schedule install
+expect_rc 2 "install refuses a notifier it cannot resolve"
+assert "the refusal says why" has "$ERR" "does not resolve"
+MUSTER_CONFIG=$C/two cli schedule install
+
 # === remove =================================================================
 cli schedule remove
 expect_rc 0 "remove"

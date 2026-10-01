@@ -47,6 +47,18 @@ _sc_service() {
   for _v_k in MUSTER_ROOT MUSTER_STATE_DIR MUSTER_NOTIFY MUSTER_KEEP; do
     eval "_v_v=\${$_v_k:-}"
     [ -n "$_v_v" ] || continue
+    # The notifier is baked as an ABSOLUTE path: a unit's PATH is not the
+    # installing shell's, and a name that resolves here and not there is
+    # how charon's faults once reached nobody. Unresolvable is refused.
+    if [ "$_v_k" = MUSTER_NOTIFY ]; then
+      _v_v=$(command -v "$_v_v" 2>/dev/null) || _v_v=
+      case $_v_v in
+        /*) ;;
+        *) echo "muster: MUSTER_NOTIFY='$MUSTER_NOTIFY' does not resolve" \
+             "to a command; refusing to bake it into a unit" >&2
+           return 1 ;;
+      esac
+    fi
     _v_q=$(_sc_quote "$_v_k=$_v_v") || return 1
     printf 'Environment=%s\n' "$_v_q"
   done
