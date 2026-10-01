@@ -39,6 +39,14 @@
 # shellcheck disable=SC2034  # read by survey_lib's config check
 RUN_VERBS='survey owed catch-up'
 RUN_ACTING='catch-up'
+# THE DRIVER WHEN NONE IS DECLARED. Agreed 2026-10-01: it becomes `manual`,
+# so a standalone muster is not nagged about timers nobody asked for. It is
+# `systemd` FOR NOW because an integrator already runs a config with no
+# driver line on timers, and the agreed default would remove those timers
+# on its next apply. Expand, then contract: muster accepts `driver` (this
+# release), the integrator declares it, then this one constant flips.
+# `muster check` says when the default is being relied on.
+RUN_DRIVER_DEFAULT=systemd
 
 _rn_state_dir() {
   _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster
@@ -55,25 +63,41 @@ _rn_seconds() {   # <interval> -> seconds; fails on anything else
   esac
 }
 
-# run_profiles: "<name> <verb> <interval>" per declared profile, or the
-# default when none is declared.
+# run_profiles: "<name> <verb> <interval> <driver> [<selector>...]" per
+# declared profile, the DRIVER RESOLVED (a profile's driver= override,
+# else the config's `driver` line, else RUN_DRIVER_DEFAULT) and the token
+# taken out of the selectors. With no profile declared, muster's default:
+# owed over everything, hourly when something drives it, on demand when
+# nothing does.
 run_profiles() {
+  _f_glob=$(_sv_cfg_all driver | head -n 1)
+  _f_glob=${_f_glob:-$RUN_DRIVER_DEFAULT}
   _f_out=
   if [ -e "$SV_CONFIG" ]; then
     # `if`, never `[ ] && printf`: a false AND-list as the loop's last
     # command makes the whole substitution fail under set -e, whenever
     # the config's LAST line is not a profile (found by the test suite).
     _f_out=$(while read -r _f_kw _f_a _f_b || [ -n "$_f_kw" ]; do
-      if [ "$_f_kw" = profile ]; then printf '%s %s\n' "$_f_a" "$_f_b"; fi
-    done < "$SV_CONFIG")
+      if [ "$_f_kw" = profile ]; then
+        printf '%s %s\n' "$_f_a" "$_f_b"
+      fi
+    done < "$SV_CONFIG" | awk -v g="$_f_glob" '{
+      d = g; o = ""
+      for (i = 4; i <= NF; i++) {
+        if ($i ~ /^driver=/) { d = substr($i, 8); continue }
+        o = o " " $i
+      }
+      print $1, $2, $3, d o
+    }')
   fi
   if [ -n "$_f_out" ]; then printf '%s\n' "$_f_out"
-  else printf 'owed owed 1h\n'
+  elif [ "$_f_glob" = manual ]; then printf 'owed owed - manual\n'
+  else printf 'owed owed 1h %s\n' "$_f_glob"
   fi
 }
 
-# _rn_profile <name> -> "<verb> <interval> [<selector>...]"; fails if not
-# declared.
+# _rn_profile <name> -> "<verb> <interval> <driver> [<selector>...]";
+# fails if not declared.
 _rn_profile() {
   run_profiles | awk -v n="$1" '$1 == n { sub(/^[^ ]+ /, ""); print
     f = 1; exit } END { exit !f }'
@@ -102,7 +126,7 @@ _rn_acting() { case " $RUN_ACTING " in *" $1 "*) return 0 ;; esac; return 1; }
 # _rn_overlaps: "<profile> <profile> <repo>" for every repo selected by two
 # acting profiles. Expands every acting profile against THIS box's set.
 _rn_overlaps() {
-  run_profiles | while read -r _o_n _o_v _o_e _o_sel; do
+  run_profiles | while read -r _o_n _o_v _o_e _o_d _o_sel; do
     _rn_acting "$_o_v" || continue
     # shellcheck disable=SC2086  # selectors are words
     if [ -n "$_o_sel" ]; then _o_names=$(_rn_expand $_o_sel)
@@ -246,11 +270,11 @@ run_main() {
   survey_config || return 2
   _m_p=$(_rn_profile "$1") \
     || { echo "muster: no profile '$1' (see muster report)" >&2; return 2; }
-  # shellcheck disable=SC2086  # verb, interval, selectors: words
+  # shellcheck disable=SC2086  # verb, interval, driver, selectors: words
   set -- "$1" $_m_p
-  RN_VERB=$2 RN_EVERY=$3
+  RN_VERB=$2 RN_EVERY=$3 RN_DRIVER=$4
   _m_name=$1
-  shift 3
+  shift 4
   RN_SEL=$*
   set -- "$_m_name"
   case $1 in
@@ -272,8 +296,10 @@ run_main() {
   _m_start=$(date +%s)
   _m_rc=0
   _rn_invoke "$1" >"$_m_tmp.records" 2>"$_m_tmp.err" </dev/null || _m_rc=$?
-  printf 'profile=%s\nverb=%s\ninterval=%s\nstarted=%s\nfinished=%s\n' \
-    "$1" "$RN_VERB" "$RN_EVERY" "$_m_start" "$(date +%s)" >"$_m_tmp.meta"
+  printf 'profile=%s\nverb=%s\ninterval=%s\ndriver=%s\n' \
+    "$1" "$RN_VERB" "$RN_EVERY" "$RN_DRIVER" >"$_m_tmp.meta"
+  printf 'started=%s\nfinished=%s\n' "$_m_start" "$(date +%s)" \
+    >>"$_m_tmp.meta"
   printf 'exit=%s\nhost=%s\n' "$_m_rc" "$(hostname 2>/dev/null || echo -)" \
     >>"$_m_tmp.meta"
   _rn_store "$_m_dir" "$_m_start-$$" "$_m_tmp"
@@ -295,33 +321,63 @@ _rn_meta() {   # <meta-file> <key> -> value, or -
   sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1 | grep . || echo -
 }
 
-# _rn_status <name> <verb> <interval>: one porcelain line for one profile.
-#   never      no stored run
-#   stale      the last run is older than twice the interval: whatever
-#              should be running it has stopped
+# _rn_intent_since <name> <driver>: since when the intent to run on a
+# schedule has stood: the timer unit's mtime (systemd), the config's
+# (external). A run cannot be overdue before the intent is a full
+# interval old, and a check run moments after an install must not call
+# the run that has not happened yet a fault: that is the "APPLY DID NOT
+# FIX" loop the house notes paid for on box A.
+#
+# Before the timer exists, the intent dates from the CONFIG that declared
+# it: an integrator writes the config, then installs, then checks, and
+# that sequence has to converge rather than read `never` in the gap.
+_rn_intent_since() {
+  case $2 in
+    systemd) _sv_mtime "$(_sc_dir)/muster-$1.timer" \
+               || _sv_mtime "$SV_CONFIG" ;;
+    external) _sv_mtime "$SV_CONFIG" ;;
+    *) return 1 ;;
+  esac
+}
+
+# _rn_status <name> <verb> <interval> <driver>: one porcelain line.
 #   ok / attention / failed   the last run's exit: 0, 1, anything else
+#   stale       driven, and the last run is older than twice the interval:
+#               whatever should be running it has stopped
+#   never       driven, no run yet, and the intent is older than twice
+#               the interval: it has never been run when it should have
+#   pending     driven, no run yet, intent younger than that
+#   on-demand   manual, and never run: nothing expects it to have been
 _rn_status() {
   _t_dir=$(_rn_state_dir)/$1
   _t_meta=$_t_dir/latest.meta
   _t_fin=$(_rn_meta "$_t_meta" finished)
   _t_exit=$(_rn_meta "$_t_meta" exit)
   _t_att=-
+  _t_now=$(date +%s)
+  _t_max=0
+  [ "$4" = manual ] || _t_max=$(( $(_rn_seconds "$3" || echo 0) * 2 ))
   if [ "$_t_fin" = - ]; then
-    _t_st=never
+    if [ "$4" = manual ]; then _t_st=on-demand
+    elif _t_since=$(_rn_intent_since "$1" "$4") \
+      && [ $(( _t_now - _t_since )) -le "$_t_max" ]; then _t_st=pending
+    else _t_st=never
+    fi
   else
     _t_att=$(_rn_flagged "$2" "$_t_dir/latest.records" | grep -c . || :)
-    _t_age=$(( $(date +%s) - _t_fin ))
-    _t_max=$(( $(_rn_seconds "$3") * 2 ))
     case $_t_exit in
       0) _t_st=ok ;;
       1) _t_st=attention ;;
       *) _t_st=failed ;;
     esac
-    [ "$_t_age" -le "$_t_max" ] || _t_st=stale
+    if [ "$4" != manual ] && [ $(( _t_now - _t_fin )) -gt "$_t_max" ]; then
+      _t_st=stale
+    fi
   fi
-  printf 'profile=%s verb=%s every=%s status=%s finished=%s exit=%s' \
-    "$1" "$2" "$3" "$_t_st" "$_t_fin" "$_t_exit"
-  printf ' attention=%s host=%s\n' "$_t_att" "$(_rn_meta "$_t_meta" host)"
+  printf 'profile=%s verb=%s every=%s driver=%s status=%s finished=%s' \
+    "$1" "$2" "$3" "$4" "$_t_st" "$_t_fin"
+  printf ' exit=%s attention=%s host=%s\n' "$_t_exit" "$_t_att" \
+    "$(_rn_meta "$_t_meta" host)"
 }
 
 # report_main [--porcelain]: every profile's latest run, in one place.
@@ -334,25 +390,26 @@ report_main() {
   esac
   [ "$#" = 0 ] || { echo "usage: muster report [--porcelain]" >&2; return 2; }
   survey_config || return 2
-  _r_out=$(run_profiles | while read -r _r_n _r_v _r_e _r_sel; do
-    _rn_status "$_r_n" "$_r_v" "$_r_e"
+  _r_out=$(run_profiles | while read -r _r_n _r_v _r_e _r_d _r_sel; do
+    _rn_status "$_r_n" "$_r_v" "$_r_e" "$_r_d"
   done)
   if [ "$_r_mode" = porcelain ]; then
     printf '%s\n' "$_r_out"
   else
     _rn_report_table "$_r_out"
   fi
-  printf '%s\n' "$_r_out" | awk '$4 != "status=ok" { bad = 1 }
-    END { exit bad + 0 }'
+  # Fine: ok, and the two that are not overdue (pending, on-demand).
+  printf '%s\n' "$_r_out" | awk '$5 !~ /^status=(ok|pending|on-demand)$/ {
+    bad = 1 } END { exit bad + 0 }'
 }
 
 # _rn_report_table <status-lines>: the summary, then each profile's rows
 # that need attention, drawn by that verb's own renderer.
 _rn_report_table() {
   printf '%s\n' "$1" | awk -v now="$(date +%s)" '
-    BEGIN { fmt = "%-12s  %-8s  %-5s  %-6s  %-9s  %s\n"
-            printf fmt, "PROFILE", "VERB", "EVERY", "LAST", "STATUS",
-              "ATTENTION" }
+    BEGIN { fmt = "%-12s  %-8s  %-5s  %-8s  %-6s  %-9s  %s\n"
+            printf fmt, "PROFILE", "VERB", "EVERY", "DRIVER", "LAST",
+              "STATUS", "ATTENTION" }
     {
       split("", f)
       for (i = 1; i <= NF; i++) {
@@ -364,8 +421,8 @@ _rn_report_table() {
         last = d < 120 ? d "s" : d < 7200 ? int(d / 60) "m" : \
           d < 172800 ? int(d / 3600) "h" : int(d / 86400) "d"
       }
-      printf fmt, f["profile"], f["verb"], f["every"], last, f["status"],
-        f["attention"]
+      printf fmt, f["profile"], f["verb"], f["every"], f["driver"], last,
+        f["status"], f["attention"]
     }'
   printf '%s\n' "$1" | while read -r _p_l; do
     _p_n=$(printf '%s\n' "$_p_l" | tr ' ' '\n' | sed -n 's/^profile=//p')

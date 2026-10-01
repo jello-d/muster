@@ -14,33 +14,9 @@ H_NAME=schedule
 . "$(dirname -- "$0")/harness_lib"
 
 export MUSTER_STATE_DIR="$_T/state"
-UNITS=$HOME/.config/systemd/user
-case $UNITS in
-  "$_T"/*) ;;
-  *) echo "FAIL schedule: unit dir [$UNITS] is outside the scratch dir"
-     exit 1 ;;
-esac
-SYS=$_T/systemd-state
-mkdir -p "$_T/stub" "$SYS"
-cat > "$_T/stub/systemctl" <<STUB
-#!/bin/sh
-printf '%s\n' "\$*" >> '$SYS/log'
-[ "\$1" = --user ] || exit 9
-shift
-cmd=\$1; shift
-[ "\${1:-}" = --now ] && shift
-[ "\${1:-}" = --quiet ] && shift
-case \$cmd in
-  daemon-reload) exit 0 ;;
-  enable) touch "$SYS/enabled.\$1" "$SYS/active.\$1" ;;
-  disable) rm -f "$SYS/enabled.\$1" "$SYS/active.\$1" ;;
-  is-enabled) [ -e "$SYS/enabled.\$1" ] ;;
-  is-active) [ -e "$SYS/active.\$1" ] ;;
-  *) exit 9 ;;
-esac
-STUB
-chmod +x "$_T/stub/systemctl"
-export PATH="$_T/stub:$PATH"
+h_stub_systemctl
+UNITS=$H_UNITS
+SYS=$H_SYS
 assert "the stub is the systemctl in use" \
   test "$(command -v systemctl)" = "$_T/stub/systemctl"
 
@@ -75,7 +51,7 @@ assert "install: reloaded the manager" \
   has "$(cat "$SYS/log")" "--user daemon-reload"
 cli schedule check
 expect_rc 0 "check after install"
-assert "check after install says so" has "$OUT" "ok         every profile"
+assert "check after install says so" has "$OUT" "ok         the units match"
 
 # The units themselves.
 SVC=$(cat "$UNITS/muster-watch.service")

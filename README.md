@@ -171,15 +171,25 @@ left mid-operation and needs a human now.
 A profile is a POLICY OVER A SET OF REPOS: a verb, how often, and
 which repos.
 
-    profile <name> <verb> <interval> [<selector>...]
+    driver <systemd|external|manual>
+    profile <name> <verb> <interval> [driver=<d>] [<selector>...]
         verb       survey, owed or catch-up
-        interval   30m, 2h, 1d
+        interval   30m, 2h, 1d; or - for a manual profile
+        driver     WHO RUNS it: muster's own timers (systemd), the
+                   integrator's scheduler calling `muster run` (external),
+                   or nobody, on demand (manual). Per profile, else the
+                   config's `driver` line
         selector   a repo name, or /ERE/ matched against the WHOLE name;
                    none means the whole set
 
     profile watch  owed     1h                   # everything, observed
     profile canon  catch-up 15m shared-notes     # one repo, kept current
     profile quiet  catch-up 2h  /h.*/ charon     # a group, by rule
+
+The driver is the user's INTENT, and `muster check` squares it against
+what is here. With no `driver` line, profiles are taken as systemd-driven
+FOR NOW, because a deployed config relies on that; the agreed default is
+`manual`, and the check notes whenever the default is being relied on.
 
 ACTING profiles (catch-up) may not select the same repo: two could act on
 it at once. `run` and `schedule install` refuse an overlap; observe-only
@@ -215,14 +225,31 @@ not on PATH is reported on stderr, never skipped in silence.
 
 ### check
 
-`muster check` asks whether the declared policy is coherent on THIS box,
-without running any verb: it expands every profile against the
-filesystem and lists each profile's repos, then the findings:
-`overlap` (two acting profiles share a repo), `missing` (a literal
-selector is not a repo here), `empty` (a profile selects nothing), and,
-as a note rather than a finding, `unmatched` (a pattern matches nothing
-here, which a rule may rightly do on one box). Exit 0 coherent, 1
-findings, 2 an invalid config.
+`muster check` is the one comprehensive check: is all well with muster
+on THIS box, judged against what was DECLARED? It runs no verb. It lists
+each profile with its driver and its repos, then every finding, tagged
+by the remedy it wants:
+
+    drift   `muster schedule install` repairs it: a unit missing,
+            differing, disabled, inactive, an orphan, or `unwanted`
+            (present for a profile not driven by systemd)
+    fault   no install repairs it: overlapping acting profiles, a
+            literal selector that is not a repo here, an empty
+            selection, an incoherent profile (an interval nothing will
+            honour, or a driven profile with none), systemd wanted and
+            absent, or runs the intent promises that are not happening:
+            `stale`, `never`, `failed`
+    note    shown, never counted: a pattern matching nothing here, an
+            undeclared driver
+
+Exit: **0** all well, **1** drift only, **3** any fault (it outranks
+drift), **2** an invalid config. An integrator maps 1 to its apply and 3
+to a fault, so its check never reports as repairable what its apply
+cannot repair. A run is not overdue until the intent is twice the
+interval old (dated from the timer, or before one exists from the
+config), so writing the config, installing and checking converges.
+Whether repos need ATTENTION is not judged here: that is the fleet's
+state, which `report` and the notifier carry.
 
 ### schedule
 

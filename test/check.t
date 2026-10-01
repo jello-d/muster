@@ -1,6 +1,12 @@
 #!/bin/sh
-# test/check.t - `muster check`: profiles as policies over SETS of repos,
-# expanded against the filesystem, and the incoherences it must name.
+# test/check.t - `muster check`: the declared policy and the declared
+# INTENT, squared against this box. Policy: profiles over sets of repos,
+# expanded against the filesystem. Intent: who drives each profile
+# (systemd, external, manual), and whether the units and the runs agree.
+#
+# The exit is a contract an integrator maps onto apply and check:
+# 0 all well, 1 drift only (`schedule install` repairs it), 3 a fault (no
+# install repairs it), 2 an invalid config.
 #
 # Prints `ok   check (N checks)` or `FAIL check:` and every failure.
 set -u
@@ -8,78 +14,181 @@ set -u
 H_NAME=check
 # shellcheck source=SCRIPTDIR/harness_lib
 . "$(dirname -- "$0")/harness_lib"
+h_stub_systemctl
 
+export MUSTER_STATE_DIR="$_T/state"
 C=$_T/cfg
 mkdir -p "$C"
 for _n in alpha beta gamma hush hwdp; do mkrepo "$_n"; done
+export MUSTER_CONFIG="$C/repos"
 ck() {   # <config lines...>: write them, run check
-  printf '%s\n' "$@" > "$C/repos"
-  OUT=$(MUSTER_CONFIG=$C/repos "$MUSTER" check 2>"$_T/err" </dev/null)
+  printf '%s\n' "$@" > "$MUSTER_CONFIG"
+  OUT=$("$MUSTER" check 2>"$_T/err" </dev/null)
   RC=$?
   ERR=$(cat "$_T/err")
 }
+# The POLICY tests run undriven, so no run or unit can be a finding.
+pol() { ck 'driver manual' "$@"; }
 row() { printf '%s\n' "$OUT" | awk -v p="$1" '$1 == p'; }
+none() { test -z "$(printf '%s\n' "$OUT" | grep -E '^(fault|drift) ')"; }
 
-# === a coherent policy =======================================================
-ck 'profile watch owed 1h' 'profile canon catch-up 15m alpha' \
-   'profile pkgs catch-up 2h /h.*/'
+# === policy: profiles over sets of repos =====================================
+pol 'profile watch owed -' 'profile canon catch-up - alpha' \
+   'profile pkgs catch-up - /h.*/'
 expect_rc 0 "disjoint acting profiles, overlapping observe-only"
 assert "no selectors: the whole set" has "$(row watch)" "all (5)"
-assert "a literal selects that repo" test "$(row canon | awk '{print $4}')" \
-  = alpha
+assert "a literal selects that repo" \
+  test "$(row canon | awk '{print $5}')" = alpha
 assert "a pattern selects by whole name" has "$(row pkgs)" "hush hwdp"
 assert "a pattern is anchored: /h.*/ does not take alpha" \
   test -z "$(row pkgs | grep alpha)"
-assert "coherent: no findings section" test -z "$(printf '%s\n' "$OUT" \
-  | grep -E '^(overlap|missing|empty|unmatched) ')"
+assert "coherent: no findings" none
 
-# === findings =================================================================
-ck 'profile a catch-up 1h alpha beta' 'profile b catch-up 2h /b.*|gamma/'
-expect_rc 1 "two acting profiles share a repo"
+pol 'profile a catch-up - alpha beta' 'profile b catch-up - /b.*|gamma/'
+expect_rc 3 "two acting profiles share a repo: a FAULT"
 assert "overlap names both profiles and the repo" \
-  has "$OUT" "overlap    a and b both act on beta"
-ck 'profile a catch-up 1h' 'profile b catch-up 2h hush'
-expect_rc 1 "a whole-set acting profile overlaps any other acting one"
-assert "whole-set overlap named" has "$OUT" "a and b both act on hush"
-ck 'profile a owed 1h alpha' 'profile b owed 2h alpha' \
-   'profile c survey 1d alpha'
+  has "$OUT" "fault  overlap    a and b both act on beta"
+pol 'profile a catch-up -' 'profile b catch-up - hush'
+expect_rc 3 "a whole-set acting profile overlaps any other acting one"
+pol 'profile a owed - alpha' 'profile b owed - alpha' 'profile c survey - alpha'
 expect_rc 0 "observe-only profiles may overlap freely"
-ck 'profile a catch-up 1h alpha' 'profile b owed 2h alpha'
+pol 'profile a catch-up - alpha' 'profile b owed - alpha'
 expect_rc 0 "an acting and an observing profile may share a repo"
 
-ck 'profile a owed 1h alpha nosuch'
-expect_rc 1 "a literal that is not a repo here"
-assert "missing named" has "$OUT" "missing    a: nosuch is not a repo here"
+pol 'profile a owed - alpha nosuch'
+expect_rc 3 "a literal that is not a repo here"
+assert "missing named" has "$OUT" "fault  missing    a: nosuch is not a repo"
 mkdir "$ROOT/plaindir"
-ck 'profile a owed 1h plaindir'
-expect_rc 1 "a literal naming a non-repo directory"
-
-ck 'profile a owed 1h /zz.*/'
-expect_rc 1 "a profile that selects nothing"
-assert "empty named" has "$OUT" "empty      a: selects no repos"
-assert "the dead pattern is noted too" \
-  has "$OUT" "unmatched  a: /zz.*/ matches no repo here"
-
-ck 'profile a owed 1h alpha /zz.*/'
+pol 'profile a owed - plaindir'
+expect_rc 3 "a literal naming a non-repo directory"
+pol 'profile a owed - /zz.*/'
+expect_rc 3 "a profile that selects nothing"
+assert "empty named" has "$OUT" "fault  empty      a: selects no repos"
+assert "the dead pattern is a note" has "$OUT" "note   unmatched  a: /zz.*/"
+pol 'profile a owed - alpha /zz.*/'
 expect_rc 0 "a pattern matching nothing beside a live selector: a note"
-assert "unmatched is still shown" has "$OUT" "unmatched  a: /zz.*/"
-
 if [ -n "$CAN_LOCK" ]; then
   mkrepo locked
   chmod 000 "$ROOT/locked"
-  ck 'profile a owed 1h locked'
+  pol 'profile a owed - locked'
   expect_rc 0 "an unreadable literal is THERE, so not missing"
   chmod 755 "$ROOT/locked"
 fi
 
-# === selectors are validated as config =======================================
-for _bad in 'profile a owed 1h //' 'profile a owed 1h /a[/' \
-    'profile a owed 1h a/b' 'profile a owed 1h a,b'; do
-  ck "$_bad"
-  expect_rc 2 "an invalid selector: $_bad"
+for _bad in 'profile a owed - //' 'profile a owed - /a[/' \
+    'profile a owed - a/b' 'profile a owed - a,b' 'driver cron' \
+    'profile a owed - driver=cron' \
+    'profile a owed 1h driver=systemd x driver=manual'; do
+  ck 'driver manual' "$_bad"
+  expect_rc 2 "invalid config: $_bad"
 done
-ck 'profile a owed 1h a.b-c_d /x|y/'
-expect_rc 1 "valid selector syntax (findings, not a config error)"
+ck 'driver manual' 'driver systemd'
+expect_rc 2 "more than one driver line"
+
+# === intent: manual ==========================================================
+pol 'profile a owed 1h alpha'
+expect_rc 3 "manual with an interval: nothing will honour it"
+assert "the incoherence is named" has "$OUT" "fault  interval   a: every 1h"
+pol 'profile a owed - alpha'
+expect_rc 0 "manual, never run: on demand, not a finding"
+assert "no driver note once one is declared" \
+  test -z "$(printf '%s\n' "$OUT" | grep 'note   driver')"
+mkdir -p "$HOME/.config/systemd/user"
+_mark='# generated by muster schedule: edit the profile, not this file'
+printf '%s\n' "$_mark" > "$HOME/.config/systemd/user/muster-a.timer"
+pol 'profile a owed - alpha'
+expect_rc 1 "a muster timer for a MANUAL profile: drift, install removes it"
+assert "unwanted named" has "$OUT" "drift  unwanted   muster-a.timer"
+"$MUSTER" schedule install >/dev/null 2>&1
+pol 'profile a owed - alpha'
+expect_rc 0 "after install the unwanted unit is gone"
+# Run once by hand, long ago: a manual profile has no cadence to miss.
+"$MUSTER" run a >/dev/null 2>&1
+sed -i.bak 's/^finished=.*/finished=1000/' "$_T/state/a/latest.meta"
+rm -f "$_T/state/a/latest.meta.bak"
+pol 'profile a owed - alpha'
+expect_rc 0 "a manual profile whose last run is old is NOT stale"
+rm -f "$_T/state/a/latest.meta" "$_T/state/a/latest.records" \
+  "$_T/state/a/latest.err"
+
+# === intent: systemd =========================================================
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 1 "systemd, freshly declared, nothing installed: drift only"
+assert "missing units are drift" has "$OUT" "drift  missing    muster-a.timer"
+assert "a fresh intent is not yet 'never'" \
+  test -z "$(printf '%s\n' "$OUT" | grep 'fault  never')"
+"$MUSTER" schedule install >/dev/null 2>&1
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 0 "apply then check converges: installed, pending"
+"$MUSTER" run a >/dev/null 2>&1
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 0 "installed and run"
+# The run stops coming: stale.
+sed -i.bak 's/^finished=.*/finished=1000/' "$_T/state/a/latest.meta"
+rm -f "$_T/state/a/latest.meta.bak"
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "a driven profile whose runs stopped: a FAULT"
+assert "stale named" has "$OUT" "fault  stale      a:"
+# Never run although the intent is old: never.
+rm -f "$_T/state/a/latest.meta" "$_T/state/a/latest.records" \
+  "$_T/state/a/latest.err"
+touch -t 200001010000 "$HOME/.config/systemd/user/muster-a.timer" \
+  "$MUSTER_CONFIG"
+OUT=$("$MUSTER" check 2>/dev/null); RC=$?
+expect_rc 3 "an old intent that has never run"
+assert "never named" has "$OUT" "fault  never      a:"
+"$MUSTER" run a >/dev/null 2>&1
+ck 'driver systemd' 'profile a owed - alpha'
+expect_rc 3 "systemd with no interval: nothing to judge runs against"
+assert "named" has "$OUT" "fault  interval   a: driven by systemd"
+ck 'driver systemd' 'profile a owed 1h alpha'
+# A last run that could not run.
+sed -i.bak 's/^exit=.*/exit=2/' "$_T/state/a/latest.meta"
+rm -f "$_T/state/a/latest.meta.bak"
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "a driven profile whose last run failed"
+assert "failed named" has "$OUT" "fault  failed     a:"
+"$MUSTER" run a >/dev/null 2>&1
+# A disabled timer is drift; drift beside a fault exits as the fault.
+systemctl --user disable --now muster-a.timer
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 1 "a disabled timer: drift"
+ck 'driver systemd' 'profile a owed 1h alpha' 'profile z owed 1h nosuch'
+expect_rc 3 "drift AND a fault: the fault decides the exit"
+"$MUSTER" schedule install >/dev/null 2>&1
+
+# === intent: external ========================================================
+ck 'driver external' 'profile a owed 1h alpha'
+expect_rc 1 "external: muster's own timer must not be there"
+assert "named unwanted" has "$OUT" "drift  unwanted   muster-a.timer"
+"$MUSTER" schedule install >/dev/null 2>&1
+ck 'driver external' 'profile a owed 1h alpha'
+expect_rc 0 "external, its runs current, no muster units"
+sed -i.bak 's/^finished=.*/finished=1000/' "$_T/state/a/latest.meta"
+rm -f "$_T/state/a/latest.meta.bak"
+ck 'driver external' 'profile a owed 1h alpha'
+expect_rc 3 "external whose driver stopped running it: muster still sees it"
+assert "stale names the driver" has "$OUT" "its external driver has stopped"
+
+# === per-profile override, and the undeclared default ========================
+ck 'driver manual' 'profile a owed 1h driver=external alpha'
+assert "a profile's driver= overrides the config's" \
+  test "$(row a | awk '{print $4}')" = external
+ck 'profile a owed - alpha'
+assert "no driver declared: the check says what it assumed" \
+  has "$OUT" "note   driver     none declared"
+
+# === systemd wanted, and no systemd here =====================================
+mkdir -p "$_T/nosysd"
+for _f in /usr/bin/* /bin/*; do
+  [ "${_f##*/}" = systemctl ] && continue
+  [ -e "$_T/nosysd/${_f##*/}" ] || [ -h "$_T/nosysd/${_f##*/}" ] \
+    || ln -s "$_f" "$_T/nosysd/${_f##*/}"
+done
+printf '%s\n' 'driver systemd' 'profile a owed 1h alpha' > "$MUSTER_CONFIG"
+OUT=$(PATH=$_T/nosysd "$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "systemd wanted with no systemctl: a fault, install cannot help"
+assert "named" has "$OUT" "fault  no-systemd"
 
 cli() {
   OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)

@@ -27,6 +27,20 @@ trap "chmod -R u+rwx '$_T' 2>/dev/null; rm -rf '$_T'" EXIT
 # --- an environment that is the test's own -----------------------------------
 # The user's global git config carries a hooksPath, and the user's HOME
 # carries a real muster config; neither may leak into a fixture.
+# NO INSTALLED MUSTER ON PATH. Once a box installs muster (tackup does),
+# a test that consults PATH sees that copy, not this tree: setup.t's
+# shadowing check reported the real install the day it arrived. Every
+# directory holding a `muster` is dropped, so only this tree is in play.
+_h_path=
+_h_old=$IFS
+IFS=:
+for _h_d in $PATH; do
+  [ -x "$_h_d/muster" ] || _h_path=${_h_path:+$_h_path:}$_h_d
+done
+IFS=$_h_old
+PATH=$_h_path
+export PATH
+
 export HOME="$_T/home"
 export GIT_CONFIG_GLOBAL="$_T/gitconfig" GIT_CONFIG_NOSYSTEM=1
 export MUSTER_CONFIG="$_T/no-config" MUSTER_ROOT="$_T/src"
@@ -104,6 +118,39 @@ upstream_moves() {
   echo "x$(date +%s)$N" >> "$_T/other/$1/f"
   g "$_T/other/$1" commit -am more
   g "$_T/other/$1" push
+}
+
+# h_stub_systemctl: a systemctl first on PATH that keeps enabled/active
+# state in the scratch dir, so no test ever asks, let alone changes, the
+# real user manager. The unit dir is proven to be inside scratch first.
+h_stub_systemctl() {
+  H_UNITS=$HOME/.config/systemd/user
+  case $H_UNITS in
+    "$_T"/*) ;;
+    *) echo "FAIL $H_NAME: unit dir [$H_UNITS] is outside scratch"; exit 1 ;;
+  esac
+  H_SYS=$_T/systemd-state
+  mkdir -p "$_T/stub" "$H_SYS"
+  cat > "$_T/stub/systemctl" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >> '$H_SYS/log'
+[ "\$1" = --user ] || exit 9
+shift
+cmd=\$1; shift
+[ "\${1:-}" = --now ] && shift
+[ "\${1:-}" = --quiet ] && shift
+case \$cmd in
+  daemon-reload) exit 0 ;;
+  enable) touch "$H_SYS/enabled.\$1" "$H_SYS/active.\$1" ;;
+  disable) rm -f "$H_SYS/enabled.\$1" "$H_SYS/active.\$1" ;;
+  is-enabled) [ -e "$H_SYS/enabled.\$1" ] ;;
+  is-active) [ -e "$H_SYS/active.\$1" ] ;;
+  *) exit 9 ;;
+esac
+STUB
+  chmod +x "$_T/stub/systemctl"
+  PATH="$_T/stub:$PATH"
+  export PATH
 }
 
 # h_verdict: the last line of every test. A run that made no checks is

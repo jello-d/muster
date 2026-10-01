@@ -281,12 +281,19 @@ survey_record() {
 #                            fail the run; any OTHER state is a loud
 #                            expect-mismatch (a sealed tree turning
 #                            readable means its wall has a hole)
-#   profile <name> <verb> <interval> [<selector>...]
-#                            a scheduled run (see run_lib): verb is
-#                            survey, owed or catch-up; interval 30m, 2h,
-#                            1d. Selectors narrow it to some repos: a
-#                            bare repo name, or /ERE/ matched against the
-#                            WHOLE name. None: the whole set
+#   driver <systemd|external|manual>
+#                            WHO RUNS the profiles, by default (at most
+#                            one line; absent means manual): muster's own
+#                            timers, the integrator's own scheduler, or
+#                            nobody (on demand). The intent check squares
+#                            against
+#   profile <name> <verb> <interval> [driver=<d>] [<selector>...]
+#                            a policy over a set of repos (see run_lib):
+#                            verb is survey, owed or catch-up; interval
+#                            30m, 2h, 1d, or - for an on-demand profile.
+#                            Selectors narrow it to some repos: a bare
+#                            name, or /ERE/ matched against the WHOLE
+#                            name. None: the whole set
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -305,9 +312,11 @@ _sv_tilde() {   # <path> -> leading ~ expanded
   esac
 }
 
-# _sv_cfg_profile <name> "<verb> <interval>": a profile line is sound.
-# The verb list and interval grammar are run_lib's, read through its
-# names so the check and the runner cannot disagree.
+# _sv_cfg_profile <name> "<verb> <interval> [driver=..] [sel..]": the
+# line PARSES. The verb list and interval grammar are run_lib's, read
+# through its names so the check and the runner cannot disagree. Whether
+# the interval fits the driver is COHERENCE, judged by `muster check`,
+# not syntax: an incoherent profile must not stop `survey` working.
 _sv_cfg_profile() {
   # A profile name becomes a unit name and a directory: word characters
   # only (an @ would make a systemd template, a / a path).
@@ -316,10 +325,21 @@ _sv_cfg_profile() {
   set -- $2
   [ "$#" -ge 2 ] || return 1
   case " $RUN_VERBS " in *" $1 "*) ;; *) return 1 ;; esac
-  _rn_seconds "$2" >/dev/null || return 1
+  [ "$2" = - ] || _rn_seconds "$2" >/dev/null || return 1
   shift 2
-  for _p_sel in "$@"; do _sv_cfg_selector "$_p_sel" || return 1; done
+  _p_drv=0
+  for _p_sel in "$@"; do
+    case $_p_sel in
+      driver=*)
+        _p_drv=$((_p_drv + 1))
+        _sv_cfg_driver "${_p_sel#driver=}" && [ "$_p_drv" = 1 ] || return 1 ;;
+      *) _sv_cfg_selector "$_p_sel" || return 1 ;;
+    esac
+  done
 }
+
+_sv_cfg_driver() { case $1 in systemd|external|manual) return 0 ;; esac
+  return 1; }
 
 # _sv_cfg_selector <word>: a literal repo name, or /ERE/ that compiles. An
 # empty pattern is refused: it would select every name, which is what
@@ -340,7 +360,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
   [ -e "$SV_CONFIG" ] || return 0
   [ -r "$SV_CONFIG" ] \
     || { echo "muster: cannot read config $SV_CONFIG" >&2; return 1; }
-  _k_n=0
+  _k_n=0 _k_drv=0
   while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     _k_n=$((_k_n + 1))
     case $_k_kw in
@@ -350,6 +370,10 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
       profile) _sv_cfg_profile "$_k_a" "$_k_b" && continue ;;
+      driver)
+        _k_drv=$((${_k_drv:-0} + 1))
+        _sv_cfg_driver "$_k_a" && [ -z "$_k_b" ] && [ "$_k_drv" = 1 ] \
+          && continue ;;
       expect)
         case $_k_b in unreadable|absent) continue ;; esac ;;
     esac

@@ -1,19 +1,39 @@
 # shellcheck shell=sh
-# check_lib - `muster check`: is the declared policy coherent on THIS box?
+# check_lib - `muster check`: is all well with muster on THIS box, judged
+# against what was DECLARED rather than guessed?
 #
-# Sourced by bin/muster, never executed. It expands every profile's
-# selectors against the filesystem and reports, without running any verb:
+# Sourced by bin/muster, never executed. Agreed 2026-10-01: a comprehensive
+# check has to know the user's INTENT, because scheduling is optional. So
+# the config declares who drives each profile (systemd, external, manual)
+# and this squares that intent against what is actually here: the policy,
+# the units, and whether the runs the intent promises are happening.
 #
-#   overlap   two ACTING profiles select one repo (run and schedule
-#             install refuse this too; check is where it is seen first)
-#   missing   a literal selector names no repo here: the profile has
-#             quietly stopped covering something it names explicitly
-#   empty     a profile with selectors selects nothing: its runs fail
-#   unmatched a /pattern/ matches no repo here. A NOTE, not a finding: a
-#             pattern is a rule, and a rule may rightly match nothing on
-#             one box (curfloo exists on box B only)
+# Every finding is one of two kinds, because they want opposite remedies
+# and a check that blurs them is the box A "APPLY DID NOT FIX" loop:
 #
-# Exit 0 coherent, 1 findings, 2 the config itself is invalid.
+#   drift   `muster schedule install` repairs it (a unit missing,
+#           different, disabled, or present against intent)       exit 1
+#   fault   no apply repairs it; a human, or something outside muster,
+#           must act (overlap, a missing repo, an incoherent profile,
+#           a run that is stale, never happened, or failed)       exit 3
+#
+# A fault outranks drift in the exit. Notes (a pattern matching nothing
+# here) are shown and never counted. Exit 2: the config is invalid, or the
+# check could not run. NOT judged: whether repos need attention. That is
+# the fleet's state, reported by `report` and the notifier, not muster's
+# health.
+
+_ck_add() {   # <fault|drift|note> <words of the line...>
+  _a_k=$1; shift
+  case $_a_k in
+    fault) CK_FAULT="${CK_FAULT}fault  $*
+" ;;
+    drift) CK_DRIFT="${CK_DRIFT}drift  $*
+" ;;
+    note) CK_NOTE="${CK_NOTE}note   $*
+" ;;
+  esac
+}
 
 # _ck_literal_missing <name>: the literal is not a repo on this box.
 _ck_literal_missing() {
@@ -25,51 +45,108 @@ _ck_literal_missing() {
   return 0
 }
 
-# _ck_profile <name> <verb> <interval> [<selector>...]: one table row, and
-# its findings appended to CK_FIND.
+# _ck_profile <name> <verb> <interval> <driver> [<selector>...]: its table
+# row; its selection and coherence findings.
 _ck_profile() {
-  _p_n=$1 _p_v=$2 _p_e=$3
-  shift 3
-  if [ "$#" = 0 ]; then
-    _p_count=$(SV_RECORD_FN=_rn_name_only survey_records | grep -c . || :)
-    printf '%-12s  %-8s  %-5s  all (%s)\n' "$_p_n" "$_p_v" "$_p_e" \
-      "$_p_count"
-    return 0
+  _p_n=$1 _p_v=$2 _p_e=$3 _p_d=$4
+  shift 4
+  if [ "$_p_d" = manual ] && [ "$_p_e" != - ]; then
+    _ck_add fault "interval   $_p_n: every $_p_e, but driven by nothing" \
+      "(manual); declare a driver, or write -"
+  elif [ "$_p_d" != manual ] && [ "$_p_e" = - ]; then
+    _ck_add fault "interval   $_p_n: driven by $_p_d with no interval to" \
+      "judge its runs against"
   fi
-  for _p_s in "$@"; do
-    case $_p_s in
-      /*/) [ -n "$(_rn_expand "$_p_s")" ] \
-             || CK_NOTE="${CK_NOTE}unmatched  $_p_n: $_p_s matches no repo here
-" ;;
-      *) _ck_literal_missing "$_p_s" \
-           && CK_FIND="${CK_FIND}missing    $_p_n: $_p_s is not a repo here
-" ;;
-    esac
-  done
-  _p_names=$(_rn_expand "$@" | tr '\n' ' ' | sed 's/ $//')
-  [ -n "$_p_names" ] \
-    || CK_FIND="${CK_FIND}empty      $_p_n: selects no repos on this box
-"
-  printf '%-12s  %-8s  %-5s  %s\n' "$_p_n" "$_p_v" "$_p_e" \
+  if [ "$#" = 0 ]; then
+    _p_names="all ($(SV_RECORD_FN=_rn_name_only survey_records \
+      | grep -c . || :))"
+  else
+    for _p_s in "$@"; do
+      case $_p_s in
+        /*/) [ -n "$(_rn_expand "$_p_s")" ] \
+               || _ck_add note "unmatched  $_p_n: $_p_s matches no repo here" ;;
+        *) if _ck_literal_missing "$_p_s"; then
+             _ck_add fault "missing    $_p_n: $_p_s is not a repo here"
+           fi ;;
+      esac
+    done
+    _p_names=$(_rn_expand "$@" | tr '\n' ' ' | sed 's/ $//')
+    [ -n "$_p_names" ] \
+      || _ck_add fault "empty      $_p_n: selects no repos on this box"
+  fi
+  printf '%-12s  %-8s  %-5s  %-8s  %s\n' "$_p_n" "$_p_v" "$_p_e" "$_p_d" \
     "${_p_names:-(none)}"
+}
+
+# _ck_runs <status-line>: a driven profile whose runs are not happening,
+# or whose last run could not run, is a fault no install repairs.
+_ck_runs() {
+  # shellcheck disable=SC2046  # four space-free values, split
+  set -- $(printf '%s\n' "$1" | awk '{
+    for (i = 1; i <= NF; i++) {
+      k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v); f[k] = v
+    }
+    print f["profile"], f["every"], f["driver"], f["status"] }')
+  case $4 in
+    stale) _ck_add fault "stale      $1: last run older than twice its" \
+             "interval ($2); its $3 driver has stopped running it" ;;
+    never) _ck_add fault "never      $1: driven by $3 every $2, and has" \
+             "never run" ;;
+    failed) _ck_add fault "failed     $1: its last run could not run" \
+              "(see muster report)" ;;
+  esac
 }
 
 check_main() {
   [ "$#" = 0 ] || { echo "usage: muster check" >&2; return 2; }
   survey_config || return 2
-  CK_FIND='' CK_NOTE=''
-  printf '%-12s  %-8s  %-5s  %s\n' PROFILE VERB EVERY REPOS
+  CK_FAULT='' CK_DRIFT='' CK_NOTE=''
+  printf '%-12s  %-8s  %-5s  %-8s  %s\n' PROFILE VERB EVERY DRIVER REPOS
   _c_list=$(run_profiles)
-  while read -r _c_n _c_v _c_e _c_sel; do
+  while read -r _c_n _c_v _c_e _c_d _c_sel; do
     # shellcheck disable=SC2086  # selectors are words
-    _ck_profile "$_c_n" "$_c_v" "$_c_e" $_c_sel
+    _ck_profile "$_c_n" "$_c_v" "$_c_e" "$_c_d" $_c_sel
+    _ck_runs "$(_rn_status "$_c_n" "$_c_v" "$_c_e" "$_c_d")"
   done <<PROFILES
 $_c_list
 PROFILES
   _c_ov=$(_rn_overlaps)
-  [ -z "$_c_ov" ] || CK_FIND="$CK_FIND$(printf '%s\n' "$_c_ov" \
-    | awk '{ printf "overlap    %s and %s both act on %s\n", $1, $2, $3 }')
-"
-  [ -z "$CK_FIND$CK_NOTE" ] || printf '\n%s%s' "$CK_FIND" "$CK_NOTE"
-  [ -z "$CK_FIND" ]
+  while read -r _c_a _c_b _c_r; do
+    [ -z "$_c_r" ] \
+      || _ck_add fault "overlap    $_c_a and $_c_b both act on $_c_r"
+  done <<OVERLAPS
+$_c_ov
+OVERLAPS
+  _ck_schedule
+  if [ -z "$(_sv_cfg_all driver)" ]; then
+    _ck_add note "driver     none declared, so profiles without driver= are" \
+      "taken as $RUN_DRIVER_DEFAULT; declare \`driver <systemd|external|" \
+      "manual>\`: this default is going to become manual"
+  fi
+  [ -z "$CK_FAULT$CK_DRIFT$CK_NOTE" ] \
+    || printf '\n%s%s%s' "$CK_FAULT" "$CK_DRIFT" "$CK_NOTE"
+  if [ -n "$CK_FAULT" ]; then return 3; fi
+  if [ -n "$CK_DRIFT" ]; then return 1; fi
+  return 0
+}
+
+# _ck_schedule: the units against the intent. Every line is drift, except
+# that systemd being wanted and absent is a fault: no install can fix it.
+_ck_schedule() {
+  if [ -n "$(_sc_wanted "$(run_profiles)")" ] \
+    && ! command -v systemctl >/dev/null 2>&1; then
+    _ck_add fault "no-systemd profiles are driven by systemd, and there is" \
+      "no systemctl here"
+    return 0
+  fi
+  if _c_out=$(_sc_findings 2>&1); then
+    while IFS= read -r _c_l; do
+      [ -z "$_c_l" ] || _ck_add drift "$_c_l"
+    done <<FINDINGS
+$_c_out
+FINDINGS
+  else
+    _ck_add fault "units      the expected units could not be computed:" \
+      "$(printf '%s' "$_c_out" | head -n 1)"
+  fi
 }
