@@ -182,6 +182,61 @@ _cu_render() {
     }'
 }
 
+# THE CANONICALS GO FIRST. Every vendored copy is judged against its
+# canonical, and a canonical whose checkout is behind is not trusted, so
+# a run that pulled it in the middle of the set would leave every copy
+# `unknown` until a second run. Seen live on box A 2026-10-01: its
+# shared-notes was behind, and that one pull decided the whole table.
+# So each canonical's repo is caught up before the canonicals are loaded,
+# and its row in the set reports what this pre-pass did.
+
+_cu_resolve() { (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P); }
+
+_cu_path_only() { _sv_esc "$(_cu_resolve "$2")"; echo; }
+
+# _cu_canon_first [name...]: catch up each canonical's repo that is IN THE
+# SET, once each: a run asked about mux alone must not pull shared-notes,
+# and every repo acted on must get a row. Keeps what was done in CU_PRE as
+# "<resolved-path> <action> <result> <from> <to> <owed>" lines (resolved
+# paths are percent-encoded, so they hold no spaces).
+_cu_canon_first() {
+  # shellcheck disable=SC2034  # OW_ARTLIST is read by owed_lib
+  CU_PRE='' OW_ARTLIST=''
+  [ -e "$SV_CONFIG" ] || return 0
+  _p_set=$(SV_RECORD_FN=_cu_path_only survey_records "$@")
+  while read -r _p_kw _p_canon _p_rest || [ -n "$_p_kw" ]; do
+    [ "$_p_kw" = artifact ] || continue
+    _p_canon=$(_sv_tilde "$_p_canon")
+    _p_top=$(git -C "$(dirname -- "$_p_canon")" rev-parse --show-toplevel \
+      2>/dev/null) || continue
+    _p_key=$(_sv_esc "$(_cu_resolve "$_p_top")")
+    printf '%s\n' "$_p_set" | grep -qxF -- "$_p_key" || continue
+    printf '%s' "$CU_PRE" | awk -v k="$_p_key" '$1 == k { f = 1 }
+      END { exit !f }' && continue
+    catchup_record canonical "$_p_top" >/dev/null
+    CU_PRE="$CU_PRE$_p_key $CU_ACTION $CU_RESULT $(_sv_short "$CU_FROM")"
+    CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED
+"
+  done < "$SV_CONFIG"
+}
+
+# _cu_set_record <name> <path> [<deployed>]: the record for a repo in the
+# set; a canonical's repo reports its pre-pass, re-judged now.
+_cu_set_record() {
+  _s_key=$(_sv_esc "$(_cu_resolve "$2")")
+  _s_pre=$(printf '%s' "$CU_PRE" | awk -v k="$_s_key" '$1 == k')
+  if [ -z "$_s_pre" ]; then catchup_record "$@"; return; fi
+  _s_fetch=${SV_DO_FETCH:-}
+  SV_DO_FETCH=
+  owed_record "$@" >/dev/null
+  SV_DO_FETCH=$_s_fetch
+  # shellcheck disable=SC2086  # six space-free fields, split on purpose
+  set -- "$1" "$2" $_s_pre
+  printf 'name=%s action=%s result=%s from=%s to=%s owed=%s' \
+    "$(_sv_esc "$1")" "$4" "$5" "$6" "$7" "$8"
+  printf ' remaining=%s path=%s\n' "$OW_LIST" "$(_sv_esc "$2")"
+}
+
 catchup_main() {
   SV_MODE=table CU_DRY=
   # shellcheck disable=SC2034  # SV_DO_FETCH is read by survey_lib
@@ -198,8 +253,9 @@ catchup_main() {
     shift
   done
   survey_setup "$@" || return 2
+  _cu_canon_first "$@"
   _ow_canon_load
-  _m_out=$(SV_RECORD_FN=catchup_record survey_records "$@") \
+  _m_out=$(SV_RECORD_FN=_cu_set_record survey_records "$@") \
     || { echo "muster: catch-up itself failed" >&2; return 2; }
   [ -n "$_m_out" ] \
     || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }

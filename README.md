@@ -129,6 +129,11 @@ judges each repo with owed's own computation, and then:
   rebase that fails is aborted; one that altered the local work is reset
   to the exact commit it started from. Both are checked, not assumed.
 
+The repo holding each canonical is caught up FIRST, when it is in the
+set, so one run can pull a stale canonical and then judge every copy
+against it; without that, a behind canonical makes every copy `unknown`
+until a second run.
+
 Immediately before acting it re-checks that HEAD, the upstream ref and
 the clean tree are still what the verdict saw; if another session moved
 any of them, the repo is reported `changed-underfoot` and left alone.

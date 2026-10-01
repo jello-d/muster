@@ -218,6 +218,44 @@ assert "a failed action fails the run even with nothing remaining" \
 cu_rec ok | _cu_render porcelain >/dev/null 2>&1
 assert "an ok action with nothing remaining passes" test "$?" = 0
 
+# === the canonical's own repo is caught up FIRST ============================
+# The box A shape, 2026-10-01: the copies are already current, but
+# the canonical's checkout is behind, so nothing can be judged until it is
+# pulled. One run must pull it AND then judge the copies against it.
+mkrepo notes
+commit_file "$ROOT/notes" _conv "v1" v1
+g "$ROOT/notes" push
+git clone -q "$_T/origins/notes.git" "$_T/other/notes" 2>/dev/null
+commit_file "$_T/other/notes" _conv "v2" v2
+g "$_T/other/notes" push
+mkrepo carrier
+commit_file "$ROOT/carrier" test/conv.t "v2" seeded-v2
+g "$ROOT/carrier" push
+C=$_T/cfg
+mkdir -p "$C"
+printf 'artifact %s/_conv test/conv.t\n' "$ROOT/notes" > "$C/art"
+printf 'repo carrier\nrepo notes\n' >> "$C/art"
+_notes_was=$(head_of "$ROOT/notes")
+
+# Asked about the carrier alone, the canonical is NOT touched.
+MUSTER_CONFIG=$C/art catchup carrier
+assert "named run: the canonical's repo was not pulled" \
+  test "$(head_of "$ROOT/notes")" = "$_notes_was"
+expect carrier remaining unknown
+
+MUSTER_CONFIG=$C/art catchup
+expect notes action pull
+expect notes result ok
+expect notes remaining nothing
+expect carrier remaining nothing
+expect_rc 0 "one run: canonical pulled, copies judged against it"
+assert "canonical: HEAD is origin's" \
+  test "$(head_of "$ROOT/notes")" = "$(origin_head notes)"
+assert "the canonical's repo has exactly one row" \
+  test "$(printf '%s\n' "$OUT" | grep -c '^name=notes ')" = 1
+assert "no untrusted-canonical warning after the pre-pass" \
+  test -z "$ERR"
+
 # === a whole run: mixed verdicts, one table, one exit =======================
 set -- behind disjoint overlap dirty unreach ahead
 OUTP=$("$MUSTER" catch-up --porcelain --dry-run "$@" 2>/dev/null); RCP=$?
