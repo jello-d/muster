@@ -79,6 +79,19 @@ MUSTER_CONFIG=$_cfg "$_bin" run watch >/dev/null 2>&1
 assert "the unit's command runs the profile and stores it" \
   test -s "$_T/state/watch/latest.records"
 
+# With a muster INSTALLED (on PATH), the unit runs that one, whichever
+# copy ran install, and a check from this tree sees no drift: a dev
+# checkout must never repoint the live timers at itself.
+mkdir -p "$_T/installed"
+ln -s "$MUSTER" "$_T/installed/muster"
+PATH="$_T/installed:$PATH" "$MUSTER" schedule install >/dev/null 2>&1
+assert "the unit runs the INSTALLED muster, not the copy that installed" \
+  has "$(cat "$UNITS/muster-watch.service")" \
+  "ExecStart=\"$_T/installed/muster\" run watch"
+OUT=$(PATH="$_T/installed:$PATH" "$MUSTER" schedule check 2>&1); RC=$?
+expect_rc 0 "a check from this tree against the installed muster's units"
+"$MUSTER" schedule install >/dev/null 2>&1
+
 # Idempotent: nothing rewritten the second time.
 cli schedule install
 expect_rc 0 "install again"

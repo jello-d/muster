@@ -266,6 +266,9 @@ state, which `report` and the notifier carry.
 user units (`~/.config/systemd/user/muster-<profile>.{service,timer}`),
 generated, never hand-edited:
 
+- The unit runs THE INSTALLED muster, the one on PATH (falling back to
+  the running copy only where none is installed), so an install or a
+  check from a dev checkout never repoints the live timers at that tree.
 - `install` writes each unit only if its content changed, bakes the
   config path (and `MUSTER_ROOT`, `MUSTER_STATE_DIR`, `MUSTER_NOTIFY`,
   `MUSTER_KEEP` when set) into the service, the notifier as an ABSOLUTE
