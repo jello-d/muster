@@ -29,11 +29,24 @@ nhist() { find "$S/$1/history" -name '*.meta' | wc -l | tr -d ' '; }
 
 # === the default profile, before and after its first run ===================
 mkrepo one
+# With nothing declared: owed over everything, ON DEMAND. Nothing is
+# scheduled that was not declared, so not having run is not a finding.
 cli report --porcelain
-expect_rc 1 "report before any run"
-assert "default profile: owed, hourly" test "$(pfield owed verb)" = owed
-assert "default profile: every 1h" test "$(pfield owed every)" = 1h
-assert "no run yet: never" test "$(pfield owed status)" = never
+expect_rc 0 "report before any run, nothing declared"
+assert "default profile: owed" test "$(pfield owed verb)" = owed
+assert "default profile: on demand, no interval" \
+  test "$(pfield owed every)" = -
+assert "default profile: driven by nothing" \
+  test "$(pfield owed driver)" = manual
+assert "no run yet, on demand: on-demand" \
+  test "$(pfield owed status)" = on-demand
+# Declaring only a driver gives the default profile a cadence.
+printf 'driver systemd\n' > "$C/sys"
+MUSTER_CONFIG=$C/sys cli report --porcelain
+assert "driver systemd alone: the default runs hourly" \
+  test "$(pfield owed every)" = 1h
+assert "driver systemd alone: a fresh intent is pending, not never" \
+  test "$(pfield owed status)" = pending
 
 cli run owed
 expect_rc 0 "run: the verb's exit passes through (clean set)"
@@ -73,15 +86,20 @@ assert "report table: the row, by owed's own renderer" has "$OUT" "behind 1"
 g "$ROOT/one" pull --ff-only
 
 # === stale, failed, and a run older than it should be ======================
-cli run owed
+# Staleness is a promise only a DRIVEN profile makes.
+MUSTER_CONFIG=$C/sys cli run owed
 sed -i.bak 's/^finished=.*/finished=1000/' "$S/owed/latest.meta"
 rm -f "$S/owed/latest.meta.bak"
-cli report --porcelain
+MUSTER_CONFIG=$C/sys cli report --porcelain
 assert "a run older than twice its interval: stale" \
   test "$(pfield owed status)" = stale
 expect_rc 1 "report with a stale profile"
-MUSTER_ROOT=$_T/nowhere "$MUSTER" run owed >/dev/null 2>&1
 cli report --porcelain
+assert "the same old run, undriven: not stale" \
+  test "$(pfield owed status)" = ok
+MUSTER_ROOT=$_T/nowhere MUSTER_CONFIG=$C/sys "$MUSTER" run owed \
+  >/dev/null 2>&1
+MUSTER_CONFIG=$C/sys cli report --porcelain
 assert "a run that could not run: failed" test "$(pfield owed status)" = failed
 assert "failed: exit 2 recorded" test "$(meta owed exit)" = 2
 

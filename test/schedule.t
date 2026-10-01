@@ -22,7 +22,8 @@ assert "the stub is the systemctl in use" \
 
 C=$_T/cfg
 mkdir -p "$C"
-printf 'profile watch owed 30m\nprofile sync catch-up 2h\n' > "$C/two"
+printf '%s\n' 'driver systemd' 'profile watch owed 30m' \
+  'profile sync catch-up 2h' > "$C/two"
 export MUSTER_CONFIG="$C/two"
 cli() {
   OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
@@ -87,7 +88,8 @@ assert "install again: nothing written" test -z "$(printf '%s\n' "$OUT" \
 
 # === drift, both ways =======================================================
 # The declared interval changed: the timer on disk is now wrong.
-printf 'profile watch owed 1h\nprofile sync catch-up 2h\n' > "$C/two"
+printf '%s\n' 'driver systemd' 'profile watch owed 1h' \
+  'profile sync catch-up 2h' > "$C/two"
 cli schedule check
 expect_rc 1 "check after the interval changed"
 assert "check: the changed timer differs" \
@@ -110,7 +112,7 @@ cli schedule install
 assert "install re-enables it" enabled sync
 
 # A profile was dropped: its units are orphans, reported then removed.
-printf 'profile watch owed 1h\n' > "$C/two"
+printf 'driver systemd\nprofile watch owed 1h\n' > "$C/two"
 cli schedule check
 expect_rc 1 "check with an orphaned profile"
 assert "check: the orphan service" has "$OUT" "orphan     muster-sync.service"
@@ -130,18 +132,18 @@ assert "install left the hand-written unit" test -f "$UNITS/muster-mine.timer"
 
 # === quoting what goes into a unit file =====================================
 mkdir -p "$_T/odd%dir"
-printf 'profile watch owed 1h\n' > "$_T/odd%dir/repos"
+printf 'driver systemd\nprofile watch owed 1h\n' > "$_T/odd%dir/repos"
 MUSTER_CONFIG=$_T/odd%dir/repos cli schedule install
 expect_rc 0 "install with a % in the config path"
 assert "a % is doubled for systemd" \
   has "$(cat "$UNITS/muster-watch.service")" "odd%%dir/repos"
 mkdir -p "$_T/bad\"dir"
-printf 'profile watch owed 1h\n' > "$_T/bad\"dir/repos"
+printf 'driver systemd\nprofile watch owed 1h\n' > "$_T/bad\"dir/repos"
 MUSTER_CONFIG=$_T/bad\"dir/repos cli schedule install
 expect_rc 2 "install refuses a value that would break the quoting"
 assert "the refusal names the value" has "$ERR" "cannot put"
 MUSTER_CONFIG=$C/two cli schedule install
-printf 'profile we@b owed 1h\n' > "$C/at"
+printf 'driver systemd\nprofile we@b owed 1h\n' > "$C/at"
 MUSTER_CONFIG=$C/at cli schedule install
 expect_rc 2 "a profile name that would make a systemd template"
 
@@ -159,7 +161,8 @@ assert "the refusal says why" has "$ERR" "does not resolve"
 MUSTER_CONFIG=$C/two cli schedule install
 
 # === overlapping acting profiles are never put on a timer ===================
-printf 'profile a catch-up 1h\nprofile b catch-up 2h one\n' > "$C/over"
+printf '%s\n' 'driver systemd' 'profile a catch-up 1h' \
+  'profile b catch-up 2h one' > "$C/over"
 MUSTER_CONFIG=$C/over cli schedule install
 expect_rc 2 "install refuses overlapping acting profiles"
 assert "the refusal names them" has "$ERR" "a b one"
@@ -168,7 +171,7 @@ MUSTER_CONFIG=$C/two cli schedule install
 
 # The notifier as a CONFIG fact: install bakes it, and a check from a
 # shell with no MUSTER_NOTIFY computes the same unit (no false drift).
-printf 'profile watch owed 1h\nnotify notify-me\n' > "$C/ntf"
+printf 'driver systemd\nprofile watch owed 1h\nnotify notify-me\n' > "$C/ntf"
 MUSTER_CONFIG=$C/ntf cli schedule install
 expect_rc 0 "install with the notifier declared in the config"
 assert "the config's notifier is baked, absolute" \
@@ -185,7 +188,7 @@ MUSTER_NOTIFY=other-notify MUSTER_CONFIG=$C/ntf cli schedule install
 assert "MUSTER_NOTIFY overrides the config" \
   has "$(cat "$UNITS/muster-watch.service")" "MUSTER_NOTIFY=$_T/stub/other"
 for _bad in 'notify a b' 'notify'; do
-  printf 'profile watch owed 1h\n%s\n' "$_bad" > "$C/nbad"
+  printf 'driver systemd\nprofile watch owed 1h\n%s\n' "$_bad" > "$C/nbad"
   MUSTER_CONFIG=$C/nbad cli schedule check
   expect_rc 2 "invalid notify line: $_bad"
 done

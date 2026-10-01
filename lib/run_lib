@@ -39,14 +39,13 @@
 # shellcheck disable=SC2034  # read by survey_lib's config check
 RUN_VERBS='survey owed catch-up'
 RUN_ACTING='catch-up'
-# THE DRIVER WHEN NONE IS DECLARED. Agreed 2026-10-01: it becomes `manual`,
-# so a standalone muster is not nagged about timers nobody asked for. It is
-# `systemd` FOR NOW because an integrator already runs a config with no
-# driver line on timers, and the agreed default would remove those timers
-# on its next apply. Expand, then contract: muster accepts `driver` (this
-# release), the integrator declares it, then this one constant flips.
-# `muster check` says when the default is being relied on.
-RUN_DRIVER_DEFAULT=systemd
+# THE DRIVER WHEN NONE IS DECLARED: manual (agreed 2026-10-01), so a
+# standalone muster is not nagged about timers nobody asked for, and
+# nothing is scheduled that was not declared. It was systemd for one
+# transition, expand then contract, because an integrator's config ran on
+# timers with no driver line and this default would have removed them; it
+# flipped once that config declared `driver systemd` on every box.
+RUN_DRIVER_DEFAULT=manual
 
 _rn_state_dir() {
   _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster

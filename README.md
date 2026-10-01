@@ -188,9 +188,9 @@ which repos.
     profile quiet  catch-up 2h  /h.*/ charon     # a group, by rule
 
 The driver is the user's INTENT, and `muster check` squares it against
-what is here. With no `driver` line, profiles are taken as systemd-driven
-FOR NOW, because a deployed config relies on that; the agreed default is
-`manual`, and the check notes whenever the default is being relied on.
+what is here. With no `driver` line, profiles are `manual`: run on
+demand, never scheduled, never stale. Nothing is put on a timer unless
+the config says so.
 
 ACTING profiles (catch-up) may not select the same repo: two could act on
 it at once. `run` and `schedule install` refuse an overlap; observe-only

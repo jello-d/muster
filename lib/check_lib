@@ -119,9 +119,8 @@ $_c_ov
 OVERLAPS
   _ck_schedule
   if [ -z "$(_sv_cfg_all driver)" ]; then
-    _ck_add note "driver     none declared, so profiles without driver= are" \
-      "taken as $RUN_DRIVER_DEFAULT; declare \`driver <systemd|external|" \
-      "manual>\`: this default is going to become manual"
+    _ck_add note "driver     none declared, so profiles without driver=" \
+      "are $RUN_DRIVER_DEFAULT (run on demand, never scheduled)"
   fi
   [ -z "$CK_FAULT$CK_DRIFT$CK_NOTE" ] \
     || printf '\n%s%s%s' "$CK_FAULT" "$CK_DRIFT" "$CK_NOTE"
