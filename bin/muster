@@ -1,0 +1,50 @@
+#!/bin/sh
+# muster - keep many repos coherent enough to reason about.
+#
+# The entry point only dispatches. Each verb lives in a sourced lib, so a
+# test can load one verb's functions without running the CLI.
+set -eu
+
+# C locale: git's messages are matched in English, and the discovery glob
+# sorts the same way on every box.
+LC_ALL=C
+export LC_ALL
+
+# FOLLOW SYMLINKS to find lib/, because an install links this file onto PATH
+# and dirname of the LINK is the wrong directory.
+_self=$0
+while [ -h "$_self" ]; do
+  _link=$(readlink -- "$_self")
+  case $_link in
+    /*) _self=$_link ;;
+    *) _self=$(dirname -- "$_self")/$_link ;;
+  esac
+done
+MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
+  || { echo "muster: no lib/ beside $_self" >&2; exit 2; }
+[ -f "$MUSTER_LIB/survey_lib" ] \
+  || { echo "muster: $MUSTER_LIB/survey_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/survey_lib
+. "$MUSTER_LIB/survey_lib"
+
+usage() {
+  cat <<'EOF'
+usage: muster <command> [options]
+
+commands:
+  survey [--porcelain] [--fetch] [name...]
+         report the state of every repo in the set: dirty, ahead, behind
+         as of the last fetch, no upstream, unreadable, and where a
+         deployed clone is declared, whether it matches origin
+  help   this text
+
+exit: 0 every repo is ok, 1 something needs attention, 2 could not run
+EOF
+}
+
+case ${1:-} in
+  survey) shift; survey_main "$@" ;;
+  help|-h|--help) usage ;;
+  '') usage >&2; exit 2 ;;
+  *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;
+esac

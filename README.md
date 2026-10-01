@@ -52,10 +52,61 @@ Diagnose with nothing, repair with tools.
   exists, that boundary is the enforcement, and a tool honouring it by
   convention would be a soft rule standing where a hard one already is.
 
+## Usage
+
+    muster survey                 every repo under ~/src, as a table
+    muster survey --porcelain     the same records, one line each
+    muster survey --fetch         fetch first (the only network use)
+    muster survey mux tackup      just these
+
+Exit status: 0 when every repo is ok, 1 when anything needs attention,
+2 when the survey could not run at all (bad option, unreadable root or
+config, no repos found).
+
+A record's `state` is `ok`, or one of the terminal states `absent`,
+`unreadable`, `not-a-repo`, `broken`, or a comma-joined list of findings:
+`dirty`, `ahead`, `behind`, `no-upstream`, `upstream-gone`, `detached`,
+`unborn`, `fetch-failed`, `deployed-differs`, `deployed-absent`, and the
+like. `unreadable` means muster could not look; it is never reported as
+absent.
+
+`behind` is counted against the local remote-tracking ref, so it is only
+as current as the last fetch, and every record carries `fetched`, the
+epoch time this clone last heard from its remote (`never` if there is no
+evidence it ever did). The table shows it as an age beside the count.
+
+### The porcelain
+
+One line per repo, space-separated `key=value`, every key on every line,
+`-` where a value does not apply, in this order:
+
+    name state branch head upstream upstream_head ahead behind fetched
+    modified untracked deployed path
+
+`name` and `path` are percent-encoded (`%`, space, tab, newline), so no
+value can contain the separator. The table is rendered from these same
+records, never computed separately.
+
+### Configuration
+
+Optional, at `$MUSTER_CONFIG` or `~/.config/muster/repos`. Without it,
+muster surveys every git repo one level under `~/src`.
+
+    root <dir>               where discovery looks
+    repo <name> [<path>]     declare the set; any `repo` line turns
+                             discovery off. path defaults to root/name
+    deployed <name> <path>   a deployed clone of <name>, compared with
+                             origin: the third head
+
+`MUSTER_ROOT` overrides `root`. An unknown directive is an error, not a
+skipped line.
+
 ## Status
 
-Specified, not yet implemented. `docs/requirements.md` carries the
-requirements, each one anchored to an incident rather than to a
-hypothetical, and a survey of the existing tools that already solve most of
-this. Read that before writing anything: the most useful conclusion in it
-is how much of this should be adopted rather than built.
+`survey` is implemented. `reconcile` and `owed` are next, built in sh on
+the survey's records: copier was verified by hand and set aside (see
+`docs/requirements.md`).
+
+`test/run` runs the suite: the vendored conventions check, shellcheck,
+and `test/survey.t`, which builds real git repositories in a scratch
+directory rather than stubbing git.

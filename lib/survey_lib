@@ -1,0 +1,422 @@
+# shellcheck shell=sh
+# survey_lib - the survey: one record per repo, and both renderers.
+#
+# Sourced by bin/muster, never executed. POSIX sh under dash, no network
+# unless --fetch, and READ-ONLY otherwise: muster is reached for when
+# something is broken, so this half needs nothing but sh, git and awk.
+#
+# ONE COMPUTATION, TWO VIEWS (R10). survey_records prints the records; the
+# table is rendered FROM those records by the same awk that prints the
+# porcelain, so the two cannot disagree, and the exit status is derived
+# from the records too.
+#
+# THE RECORD is one line of space-separated key=value fields, every key on
+# every line, `-` where a value does not apply:
+#
+#   name state branch head upstream upstream_head ahead behind fetched
+#   modified untracked deployed path
+#
+# Values that come from the filesystem (name, path) are percent-encoded
+# (% space tab newline), so a field can never contain the separator. That
+# is the whole defence against the tab-in-content parse that produced
+# false findings twice on 2026-09-30.
+
+SV_TAB=$(printf '\t')
+SV_NL='
+'
+
+# THE REPO SET'S GIT MUST BE ITS OWN. A caller running inside a git hook
+# exports GIT_DIR and friends, and `git -C` honours them over the
+# directory, so every record would silently describe the caller's repo.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
+
+_sv_esc() {   # <string> -> percent-encoded on stdout
+  case $1 in
+    *[%\ "$SV_TAB$SV_NL"]*) ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  _e_in=$1 _e_out=
+  while [ -n "$_e_in" ]; do
+    _e_c=${_e_in%"${_e_in#?}"}
+    _e_in=${_e_in#?}
+    case $_e_c in
+      %) _e_out="$_e_out%25" ;;
+      ' ') _e_out="$_e_out%20" ;;
+      "$SV_TAB") _e_out="$_e_out%09" ;;
+      "$SV_NL") _e_out="$_e_out%0A" ;;
+      *) _e_out=$_e_out$_e_c ;;
+    esac
+  done
+  printf '%s' "$_e_out"
+}
+
+_sv_mtime() {   # <file> -> epoch seconds, GNU or BSD stat; fails if absent
+  [ -e "$1" ] || return 1
+  stat -c %Y -- "$1" 2>/dev/null || stat -f %m -- "$1" 2>/dev/null
+}
+
+_sv_git() {   # <repo> <git args...>: never walks above <repo>, never locks
+  _g_repo=$1; shift
+  GIT_CEILING_DIRECTORIES=$(dirname -- "$_g_repo") GIT_OPTIONAL_LOCKS=0 \
+    git -C "$_g_repo" "$@"
+}
+
+_sv_flag() { SV_FLAGS="${SV_FLAGS:+$SV_FLAGS,}$1"; }
+
+_sv_reset() {
+  SV_FLAGS='' SV_BRANCH=- SV_HEAD=- SV_UP=- SV_UPHEAD=- SV_AHEAD=- SV_BEHIND=-
+  SV_FETCHED=- SV_MOD=- SV_UNTR=- SV_DEP=- SV_UPREF=
+}
+
+# _sv_where <path> -> repo | absent | unreadable | not-a-repo
+# UNREADABLE IS ITS OWN ANSWER (R4). Without search permission on the
+# directory, `[ -e "$1/.git" ]` is false whether or not .git exists, so
+# the absence of .git there is not evidence of anything.
+_sv_where() {
+  if [ ! -e "$1" ] && [ ! -h "$1" ]; then echo absent; return; fi
+  if [ ! -d "$1" ]; then echo not-a-repo; return; fi
+  if [ ! -x "$1" ]; then echo unreadable; return; fi
+  if [ -d "$1/.git" ] && { [ ! -r "$1/.git" ] || [ ! -x "$1/.git" ]; }; then
+    echo unreadable; return
+  fi
+  if [ -e "$1/.git" ]; then echo repo; else echo not-a-repo; fi
+}
+
+# _sv_probe_git <path>: confirm git can read it; sets SV_STATE on failure.
+# A refusal (permissions, safe.directory) is "could not look", not broken.
+_sv_probe_git() {
+  if _p_out=$(_sv_git "$1" rev-parse --git-dir 2>&1); then return 0; fi
+  case $_p_out in
+    *'ermission denied'*|*'dubious ownership'*) SV_STATE=unreadable ;;
+    *) SV_STATE=broken ;;
+  esac
+  return 1
+}
+
+# _sv_heads <path>: branch, HEAD, and the upstream as of the last fetch.
+_sv_heads() {
+  if ! SV_HEAD=$(_sv_git "$1" rev-parse -q --verify 'HEAD^{commit}'); then
+    SV_HEAD=-
+    _sv_flag unborn
+  fi
+  if ! SV_BRANCH=$(_sv_git "$1" symbolic-ref -q --short HEAD); then
+    SV_BRANCH=-
+    _sv_flag detached
+    return 0
+  fi
+  if SV_UPREF=$(_sv_git "$1" rev-parse -q --symbolic-full-name '@{u}' \
+      2>/dev/null) && [ -n "$SV_UPREF" ]; then
+    SV_UP=${SV_UPREF#refs/remotes/}
+    SV_UP=${SV_UP#refs/heads/}
+    SV_UPHEAD=$(_sv_git "$1" rev-parse -q --verify "$SV_UPREF") \
+      || SV_UPHEAD=-
+  elif _sv_git "$1" config --get "branch.$SV_BRANCH.merge" >/dev/null; then
+    # Configured, but the ref is not there: the remote branch was deleted,
+    # or this clone never fetched it. Not the same as never having one.
+    _sv_flag upstream-gone
+  else
+    _sv_flag no-upstream
+  fi
+}
+
+# _sv_counts <path>: ahead/behind against the LOCAL remote-tracking ref,
+# which is only as current as the last fetch; SV_FETCHED says how current.
+_sv_counts() {
+  [ "$SV_UP" != - ] && [ "$SV_HEAD" != - ] || return 0
+  _n_out=$(_sv_git "$1" rev-list --left-right --count "HEAD...$SV_UPREF") \
+    || { _sv_flag count-failed; return 0; }
+  # shellcheck disable=SC2086  # two numbers, split on purpose
+  set -- $_n_out
+  [ "$#" = 2 ] || { _sv_flag count-failed; return 0; }
+  SV_AHEAD=$1 SV_BEHIND=$2
+  [ "$SV_AHEAD" = 0 ] || _sv_flag ahead
+  [ "$SV_BEHIND" = 0 ] || _sv_flag behind
+}
+
+# _sv_fetched <path>: when this clone last heard from the upstream's
+# remote. The newest of FETCH_HEAD, the upstream ref's reflog, and the
+# remote's HEAD reflog, because a fresh clone writes ONLY the last one.
+# None of them means never, which is reported, not guessed around.
+_sv_fetched() {
+  [ "$SV_UP" != - ] || return 0
+  # The remote by NAME from config, not by splitting SV_UP: a remote's name
+  # may itself contain a slash.
+  _f_remote=$(_sv_git "$1" config --get "branch.$SV_BRANCH.remote") \
+    || _f_remote=${SV_UP%%/*}
+  SV_FETCHED=never
+  for _f_rel in FETCH_HEAD "logs/$SV_UPREF" \
+      "logs/refs/remotes/$_f_remote/HEAD"; do
+    _f_path=$(_sv_git "$1" rev-parse --git-path "$_f_rel") || continue
+    case $_f_path in /*) ;; *) _f_path=$1/$_f_path ;; esac
+    _f_t=$(_sv_mtime "$_f_path") || continue
+    if [ "$SV_FETCHED" = never ] || [ "$_f_t" -gt "$SV_FETCHED" ]; then
+      SV_FETCHED=$_f_t
+    fi
+  done
+}
+
+# _sv_changes <path>: tracked changes (staged or not) and untracked files.
+# Ignored files are not changes. --untracked-files is explicit so a user's
+# status.showUntrackedFiles=no cannot hide work in progress.
+_sv_changes() {
+  _c_out=$(_sv_git "$1" status --porcelain --untracked-files=normal) \
+    || { _sv_flag status-failed; return 0; }
+  # shellcheck disable=SC2046  # two numbers, split on purpose
+  set -- $(printf '%s\n' "$_c_out" | awk '
+    /^$/ { next }
+    /^\?\? / { u++; next }
+    { m++ }
+    END { print m + 0, u + 0 }')
+  SV_MOD=$1 SV_UNTR=$2
+  [ "$SV_MOD$SV_UNTR" = 00 ] || _sv_flag dirty
+}
+
+# _sv_deployed <path>: the third head (R2). A deployed clone is installed
+# FROM origin, so it is compared with origin as of the last fetch, or with
+# the dev HEAD where there is no upstream to compare against.
+_sv_deployed() {
+  case $(_sv_where "$1") in
+    repo) ;;
+    *) SV_DEP=$(_sv_where "$1"); _sv_flag "deployed-$SV_DEP"; return 0 ;;
+  esac
+  if ! SV_DEP=$(_sv_git "$1" rev-parse -q --verify 'HEAD^{commit}'); then
+    SV_DEP=broken
+    _sv_flag deployed-broken
+    return 0
+  fi
+  _d_want=$SV_UPHEAD
+  [ "$_d_want" != - ] || _d_want=$SV_HEAD
+  [ "$SV_DEP" = "$_d_want" ] || _sv_flag deployed-differs
+}
+
+# _sv_fetch <path>: --fetch only. Non-interactive by construction, so a
+# missing credential fails instead of hanging on a prompt nobody can see.
+_sv_fetch() {
+  _x_branch=$(_sv_git "$1" symbolic-ref -q --short HEAD) || return 0
+  _x_remote=$(_sv_git "$1" config --get "branch.$_x_branch.remote") \
+    || return 0
+  [ "$_x_remote" != . ] || return 0
+  _x_to=
+  command -v timeout >/dev/null 2>&1 \
+    && _x_to="timeout ${MUSTER_FETCH_TIMEOUT:-60}"
+  # shellcheck disable=SC2086  # $_x_to is empty or two words
+  GIT_TERMINAL_PROMPT=0 \
+    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
+    $_x_to git -C "$1" fetch --quiet "$_x_remote" </dev/null >/dev/null 2>&1 \
+    || _sv_flag fetch-failed
+}
+
+_sv_short() {   # <sha or word> -> 12-char sha, or the word unchanged
+  case $1 in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) printf '%.12s' "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# survey_record <name> <path> [<deployed-path>]: one line, every key.
+survey_record() {
+  _sv_reset
+  SV_STATE=$(_sv_where "$2")
+  if [ "$SV_STATE" = repo ] && _sv_probe_git "$2"; then
+    SV_STATE=
+    [ -z "${SV_DO_FETCH:-}" ] || _sv_fetch "$2"
+    _sv_heads "$2"
+    _sv_counts "$2"
+    _sv_fetched "$2"
+    _sv_changes "$2"
+    [ -z "${3:-}" ] || _sv_deployed "$3"
+    SV_STATE=${SV_FLAGS:-ok}
+  fi
+  printf 'name=%s state=%s branch=%s head=%s upstream=%s' \
+    "$(_sv_esc "$1")" "$SV_STATE" "$SV_BRANCH" "$(_sv_short "$SV_HEAD")" \
+    "$SV_UP"
+  printf ' upstream_head=%s ahead=%s behind=%s fetched=%s' \
+    "$(_sv_short "$SV_UPHEAD")" "$SV_AHEAD" "$SV_BEHIND" "$SV_FETCHED"
+  printf ' modified=%s untracked=%s deployed=%s path=%s\n' \
+    "$SV_MOD" "$SV_UNTR" "$(_sv_short "$SV_DEP")" "$(_sv_esc "$2")"
+}
+
+# THE CONFIG is optional, and is where an integrator declares facts about
+# its fleet. muster's own defaults stand without it (discover every repo
+# one level under the root). One directive per line, # comments:
+#
+#   root <dir>               where discovery looks (default ~/src)
+#   repo <name> [<path>]     declare the set explicitly; any `repo` line
+#                            turns discovery OFF. path defaults to root/name
+#   deployed <name> <path>   the deployed clone of <name> (the third head)
+#
+# Unknown directives FAIL, rather than being skipped: a typo that silently
+# drops a declaration reports a smaller fleet as a healthy one.
+
+_sv_tilde() {   # <path> -> leading ~ expanded
+  # shellcheck disable=SC2088  # a literal ~ is the thing being matched
+  case $1 in
+    '~') printf '%s' "$HOME" ;;
+    '~/'*) printf '%s/%s' "$HOME" "${1#'~/'}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+_sv_cfg_check() {   # validate the whole file before anything is read from it
+  [ -e "$SV_CONFIG" ] || return 0
+  [ -r "$SV_CONFIG" ] \
+    || { echo "muster: cannot read config $SV_CONFIG" >&2; return 1; }
+  _k_n=0
+  while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
+    _k_n=$((_k_n + 1))
+    case $_k_kw in
+      ''|'#'*) continue ;;
+      root) [ -n "$_k_a" ] && continue ;;
+      repo) [ -n "$_k_a" ] && continue ;;
+      deployed) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
+    esac
+    echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
+    return 1
+  done < "$SV_CONFIG"
+}
+
+# A LISTING (repo or deployed, no name) succeeds even when empty; a lookup
+# fails when the thing is not declared.
+_sv_cfg() {   # <directive> [<name>] -> the value
+  if [ ! -e "$SV_CONFIG" ]; then
+    [ -z "${2:-}" ] && [ "$1" != root ]
+    return
+  fi
+  while read -r _q_kw _q_a _q_b || [ -n "$_q_kw" ]; do
+    [ "$_q_kw" = "$1" ] || continue
+    case $1 in
+      root) _sv_tilde "$_q_a${_q_b:+ $_q_b}"; return 0 ;;
+      repo|deployed)
+        if [ -z "${2:-}" ]; then printf '%s\n' "$_q_a"; continue; fi
+        [ "$_q_a" = "$2" ] || continue
+        if [ -n "$_q_b" ]; then _sv_tilde "$_q_b"
+        else printf '%s/%s' "$SV_ROOT" "$_q_a"
+        fi
+        return 0 ;;
+    esac
+  done < "$SV_CONFIG"
+  [ -z "${2:-}" ] && [ "$1" != root ]
+}
+
+_sv_one() {   # <name>: resolve its path and deployed clone, emit the record
+  _o_path=$(_sv_cfg repo "$1") || _o_path=$SV_ROOT/$1
+  _o_dep=$(_sv_cfg deployed "$1") || _o_dep=
+  survey_record "$1" "$_o_path" "$_o_dep"
+}
+
+# Discovery: every directory one level under the root that is a repo, AND
+# every one that cannot be looked into, because "is it a repo?" has no
+# answer there and leaving it out would report it as absent (R4).
+_sv_discover() {
+  for _s_d in "$SV_ROOT"/*; do
+    [ -d "$_s_d" ] || continue
+    if [ -x "$_s_d" ] && [ ! -e "$_s_d/.git" ]; then continue; fi
+    _sv_one "${_s_d##*/}"
+  done
+}
+
+# survey_records [name...]: the records. Named repos, else the declared
+# set, else discovery.
+survey_records() {
+  if [ "$#" -gt 0 ]; then
+    for _s_n in "$@"; do _sv_one "$_s_n"; done
+    return 0
+  fi
+  _s_set=$(_sv_cfg repo)
+  if [ -z "$_s_set" ]; then _sv_discover; return 0; fi
+  printf '%s\n' "$_s_set" | while read -r _s_n; do _sv_one "$_s_n"; done
+}
+
+# _sv_render <porcelain|table>: records on stdin. Exits 1 when any record
+# is not ok, so the exit status is computed from the very records shown.
+# Over the 50-line guideline on purpose: it is ONE awk program, and
+# splitting it would split the single renderer R10 depends on.
+_sv_render() {
+  awk -v mode="$1" -v now="$(date +%s)" '
+    function age(t, d) {
+      if (t == "-" || t == "never") return t
+      d = now - t
+      if (d < 0) d = 0
+      if (d < 120) return d "s"
+      if (d < 7200) return int(d / 60) "m"
+      if (d < 172800) return int(d / 3600) "h"
+      return int(d / 86400) "d"
+    }
+    function changes(m, u) {
+      if (m == "-") return "-"
+      if (m + u == 0) return "-"
+      return m "M " u "U"
+    }
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        k = $i; sub(/=.*/, "", k)
+        v = $i; sub(/^[^=]*=/, "", v)
+        f[k] = v
+      }
+      if (!("state" in f) || !("name" in f)) {
+        print "muster: malformed record: " $0 > "/dev/stderr"
+        bad = 1
+        next
+      }
+      if (f["state"] != "ok") bad = 1
+      if (mode == "porcelain") { print; next }
+      n++
+      nm[n] = f["name"]; br[n] = f["branch"]; st[n] = f["state"]
+      ah[n] = f["ahead"]; bh[n] = f["behind"]; fe[n] = age(f["fetched"])
+      ch[n] = changes(f["modified"], f["untracked"])
+      dp[n] = f["deployed"]; uh[n] = f["upstream_head"]; hd[n] = f["head"]
+      if (length(nm[n]) > wn) wn = length(nm[n])
+      if (length(br[n]) > wb) wb = length(br[n])
+    }
+    END {
+      if (mode == "table" && n > 0) {
+        if (wn < 4) wn = 4
+        if (wb < 6) wb = 6
+        fmt = "%-" wn "s  %-" wb "s  %5s  %6s  %7s  %-7s  %s\n"
+        printf fmt, "REPO", "BRANCH", "AHEAD", "BEHIND", "FETCHED", \
+          "CHANGES", "STATE"
+        for (i = 1; i <= n; i++) {
+          printf fmt, nm[i], br[i], ah[i], bh[i], fe[i], ch[i], st[i]
+          if (dp[i] == "-") continue
+          printf "%-" wn "s  deployed %s, origin %s, dev %s\n", \
+            "", dp[i], uh[i], hd[i]
+        }
+      }
+      exit bad + 0
+    }'
+}
+
+survey_main() {
+  SV_MODE=table SV_DO_FETCH=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --porcelain) SV_MODE=porcelain ;;
+      --fetch) SV_DO_FETCH=1 ;;
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster survey: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  for _m_n in "$@"; do
+    [ -n "$_m_n" ] || { echo "muster survey: an empty name" >&2; return 2; }
+  done
+  SV_CONFIG=${MUSTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/muster/repos}
+  _sv_cfg_check || return 2
+  SV_ROOT=${MUSTER_ROOT:-}
+  [ -n "$SV_ROOT" ] || SV_ROOT=$(_sv_cfg root) || SV_ROOT=$HOME/src
+  if [ "$#" = 0 ] && [ -z "$(_sv_cfg repo)" ]; then
+    [ -d "$SV_ROOT" ] \
+      || { echo "muster: root $SV_ROOT does not exist" >&2; return 2; }
+    [ -r "$SV_ROOT" ] && [ -x "$SV_ROOT" ] \
+      || { echo "muster: cannot read root $SV_ROOT" >&2; return 2; }
+  fi
+  _m_out=$(survey_records "$@") \
+    || { echo "muster: the survey itself failed" >&2; return 2; }
+  [ -n "$_m_out" ] \
+    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  printf '%s\n' "$_m_out" | _sv_render "$SV_MODE"
+}
