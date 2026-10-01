@@ -171,7 +171,8 @@ MUSTER_CONFIG=$C/two cli schedule install
 
 # The notifier as a CONFIG fact: install bakes it, and a check from a
 # shell with no MUSTER_NOTIFY computes the same unit (no false drift).
-printf 'driver systemd\nprofile watch owed 1h\nnotify notify-me\n' > "$C/ntf"
+printf 'driver systemd\nprofile watch owed 1h\nnotify %s\n' \
+  "$_T/stub/notify-me" > "$C/ntf"
 MUSTER_CONFIG=$C/ntf cli schedule install
 expect_rc 0 "install with the notifier declared in the config"
 assert "the config's notifier is baked, absolute" \
@@ -187,6 +188,33 @@ chmod +x "$_T/stub/other-notify"
 MUSTER_NOTIFY=other-notify MUSTER_CONFIG=$C/ntf cli schedule install
 assert "MUSTER_NOTIFY overrides the config" \
   has "$(cat "$UNITS/muster-watch.service")" "MUSTER_NOTIFY=$_T/stub/other"
+assert "a BARE name in the override is fine: its setter resolves it" \
+  test "$RC" = 0
+# A BARE name in the CONFIG resolves through each caller's PATH, and a
+# timer's PATH is not a login shell's: refused, and a fault in check.
+printf 'driver systemd\nprofile watch owed 1h\nnotify notify-me\n' \
+  > "$C/bare"
+(unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/bare "$MUSTER" schedule install) \
+  >"$_T/ck" 2>&1
+_rc=$?
+assert "install refuses a bare-name notifier in the config" test "$_rc" = 2
+assert "and says why" has "$(cat "$_T/ck")" "is a bare name"
+(unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/bare "$MUSTER" check) >"$_T/ck" 2>&1
+_rc=$?
+assert "check: a bare-name notifier is a FAULT" test "$_rc" = 3
+assert "check names it" has "$(cat "$_T/ck")" "fault  notify     'notify-me'"
+# The override is the caller's own choice, resolved in the caller's own
+# context, so it replaces the config's bare name without complaint.
+MUSTER_NOTIFY=notify-me MUSTER_CONFIG=$C/bare cli schedule install
+assert "an override shields a bare name in the config" test "$RC" = 0
+printf 'driver systemd\nprofile watch owed 1h\nnotify %s\n' \
+  "$_T/no-such-notifier" > "$C/noexec"
+(unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/noexec "$MUSTER" check) \
+  >"$_T/ck" 2>&1
+_rc=$?
+assert "check: an absolute notifier that is not executable: fault" \
+  test "$_rc" = 3
+assert "named" has "$(cat "$_T/ck")" "is not an executable file"
 for _bad in 'notify a b' 'notify'; do
   printf 'driver systemd\nprofile watch owed 1h\n%s\n' "$_bad" > "$C/nbad"
   MUSTER_CONFIG=$C/nbad cli schedule check

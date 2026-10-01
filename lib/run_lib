@@ -210,10 +210,30 @@ _rn_store() {
 # every fault reached nobody (charon-sync, notify()).
 # run_notifier: the notifier, from $MUSTER_NOTIFY (what a unit bakes, or an
 # override) else the config's `notify` line. Empty when neither is set.
+#
+# A CONFIG notifier must be an ABSOLUTE PATH (run_notify_problem). A bare
+# name resolves through the PATH of whoever is asking, and the askers
+# differ: a login shell has ~/bin, a timer, a cron job and a plain `ssh`
+# do not. Found live by an integrator: check faulted on a healthy box
+# because it ran without ~/bin. The environment override stays lenient,
+# because whoever sets it resolves it in the context they are in.
 run_notifier() {
   if [ -n "${MUSTER_NOTIFY:-}" ]; then printf '%s' "$MUSTER_NOTIFY"
   else _sv_cfg_all notify | head -n 1
   fi
+}
+
+# run_notify_problem: why the CONFIG's notifier cannot be trusted from
+# every caller, or nothing. Says nothing when $MUSTER_NOTIFY overrides it.
+run_notify_problem() {
+  [ -z "${MUSTER_NOTIFY:-}" ] || return 0
+  _np=$(_sv_cfg_all notify | head -n 1)
+  case $_np in
+    '') ;;
+    /*) [ -x "$_np" ] || printf '%s is not an executable file' "$_np" ;;
+    *) printf '%s %s' "'$_np' is a bare name, resolved through each" \
+         "caller's PATH; declare its absolute path" ;;
+  esac
 }
 
 _rn_notify() {

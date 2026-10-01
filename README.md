@@ -172,7 +172,7 @@ A profile is a POLICY OVER A SET OF REPOS: a verb, how often, and
 which repos.
 
     driver <systemd|external|manual>
-    notify <command>
+    notify </absolute/path>
     profile <name> <verb> <interval> [driver=<d>] [<selector>...]
         verb       survey, owed or catch-up
         interval   30m, 2h, 1d; or - for a manual profile
@@ -216,14 +216,21 @@ than twice its interval, so whatever should run it has stopped). Below
 that, each profile's rows that need attention, drawn by the verb's own
 renderer. Exit 0 only when every profile is `ok`.
 
-The notifier (`notify <command>` in the config, or `$MUSTER_NOTIFY`,
-which overrides it) gets each run's STATE in the fleet's notifier
+The notifier (`notify </absolute/path>` in the config, or
+`$MUSTER_NOTIFY`, which overrides it) gets each run's STATE in the fleet's
+notifier
 protocol (intervention-required's, which charon also speaks):
 `flag muster-<profile> "<message>"` while rows need attention or the run
 could not run, `clear muster-<profile>` once none do. A flag is a
 standing fact, so raising it again is idempotent, and a lost
 notification corrects itself on the next run. A notifier that is set but
-not on PATH is reported on stderr, never skipped in silence.
+not on PATH is reported on stderr, never skipped in silence. The CONFIG's
+notifier must be an absolute path: a bare name resolves through each
+caller's PATH, and a timer, a cron job or a plain `ssh` lacks the
+`~/bin` a login shell has, so the answer depended on who asked. `check`
+calls a bare name (or a path that is not executable) a fault, and
+`schedule install` refuses it. The environment override may be a name,
+since whoever sets it resolves it where they are.
 
 ### check
 

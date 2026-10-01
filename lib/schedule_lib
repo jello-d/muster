@@ -39,6 +39,11 @@ _sc_quote() {
 # run needs is BAKED IN at install, because a timer does not inherit the
 # shell that installed it.
 _sc_service() {
+  _v_np=$(run_notify_problem)
+  if [ -n "$_v_np" ]; then
+    echo "muster: notify: $_v_np; refusing to bake it into a unit" >&2
+    return 1
+  fi
   _v_bin=$(_sc_quote "$MUSTER_BIN") || return 1
   _v_cfg=$(_sc_quote "MUSTER_CONFIG=$SV_CONFIG") || return 1
   printf '%s\n[Unit]\nDescription=muster run %s\n\n' "$SC_MARK" "$1"

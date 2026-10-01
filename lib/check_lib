@@ -117,6 +117,8 @@ PROFILES
   done <<OVERLAPS
 $_c_ov
 OVERLAPS
+  _c_np=$(run_notify_problem)
+  [ -z "$_c_np" ] || _ck_add fault "notify     $_c_np"
   _ck_schedule
   if [ -z "$(_sv_cfg_all driver)" ]; then
     _ck_add note "driver     none declared, so profiles without driver=" \
