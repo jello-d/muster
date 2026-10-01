@@ -63,6 +63,7 @@ Diagnose with nothing, repair with tools.
     muster catch-up               fast-forward and safe-rebase the set
     muster run <profile>          run a profile and store the result
     muster report                 every profile's latest run, in one view
+    muster schedule install       systemd user timers for the profiles
 
 Exit status: 0 when every repo is ok, 1 when anything needs attention,
 2 when the survey could not run at all (bad option, unreadable root or
@@ -180,6 +181,27 @@ renderer. Exit 0 only when every profile is `ok`.
 when a profile's set of rows needing attention CHANGES, not on every
 run, so a repo that stays behind does not alert every interval.
 
+### schedule
+
+`muster schedule install|check|remove` turns the profiles into systemd
+user units (`~/.config/systemd/user/muster-<profile>.{service,timer}`),
+generated, never hand-edited:
+
+- `install` writes each unit only if its content changed, bakes the
+  config path (and `MUSTER_ROOT`, `MUSTER_STATE_DIR`, `MUSTER_NOTIFY`,
+  `MUSTER_KEEP` when set) into the service, removes units for profiles
+  no longer declared, reloads the user manager and enables every timer.
+- `check` changes nothing and lists `missing`, `differs`, `disabled`,
+  `inactive` and `orphan` units, exit 1 on any: an integrator's check
+  calls it, and its apply calls `install`.
+- `remove` disables and deletes every unit muster generated.
+
+A unit is muster's only if its first line says so; a hand-written
+`muster-*.timer` is never reported or removed. Profile names are word
+characters only, since each becomes a unit name. Without systemd it
+fails, saying to call `muster run <profile>` from the box's own
+scheduler.
+
 ### The porcelain
 
 One line per repo, space-separated `key=value`, every key on every line,
@@ -219,13 +241,15 @@ skipped line.
 
 ## Status
 
-`survey`, `owed`, `catch-up`, `run` and `report` are implemented;
-`schedule` (systemd timers for the profiles) is next. Re-seeding vendored
+`survey`, `owed`, `catch-up`, `run`, `report` and `schedule` are
+implemented. Re-seeding vendored
 files (owed's `reseed`) is not: it has been needed zero times so far,
 and copier was verified by hand and set aside (see
 `docs/requirements.md`). Running catch-up on a schedule is the
 integrator's decision.
 
 `test/run` runs the suite: the vendored conventions check, shellcheck,
-and `test/survey.t`, `test/owed.t` and `test/catchup.t`, which build
-real git repositories in a scratch directory rather than stubbing git.
+and `test/survey.t`, `owed.t`, `catchup.t`, `profiles.t` and
+`schedule.t`, which build real git repositories in a scratch directory
+rather than stubbing git. Only systemctl is stubbed, and the unit
+directory is proven to be inside the scratch directory first.
