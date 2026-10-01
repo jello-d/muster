@@ -337,8 +337,11 @@ reports as modified. Every write goes to a temp file that is verified
 BEFORE it is renamed into place, and the baseline moves only after the
 live write is verified. A source root that is missing, unreadable or
 empty places and removes NOTHING. `check` reports placement drift (what
-place or merge-back repairs) and faults (conflicts, displaced edits,
-read-only destinations, a missing source).
+`place` repairs, which an apply runs) and faults (conflicts, displaced
+edits, PENDING MERGE-BACKS, read-only destinations, a missing source).
+Merge-back is a deliberate, explicit step and never part of an apply,
+so a pending one needs a person: until it runs, the edit is not in the
+source and no other machine will get it.
 
 ### schedule
 

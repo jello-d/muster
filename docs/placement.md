@@ -95,9 +95,15 @@ MUST BE TRUE: comparing the three versions yields exactly one of:
     unmanaged    live exists, no baseline: never touched (see P10)
     unreadable   could not look (R4: never reported as absent)
 
-and maps onto muster's exit contract: what a place or merge-back repairs
-is DRIFT (exit 1); a conflict, or anything no command repairs, is a FAULT
-(exit 3).
+and maps onto muster's exit contract: what a place repairs is DRIFT
+(exit 1), since an integrator's apply runs place; a conflict, or anything
+that needs a person, is a FAULT (exit 3). A PENDING MERGE-BACK IS A
+FAULT: merge-back is an explicit verb, never run by an apply (decided
+with the integrator, 2026-10-01: an apply that folds live edits into a
+shared working tree is the very thing placement retires, and these trees
+are routinely worked by other sessions), so as drift it would schedule an
+apply that could never clear it. Until it is merged back, the edit is not
+in the source and no other machine will get it.
 
 WHY: the four cases chezmoi could not tell apart are the four that need
 different remedies, and a check that blurs a fault into drift is the
@@ -157,7 +163,11 @@ lie.
 
 ### P5. Merge-back writes into the source WORKING TREE, and only there
 
-MUST BE TRUE: a merge-back writes the live content into the integrator's
+MUST BE TRUE: merge-back is an EXPLICIT step a person runs, never part
+of an automatic apply (the integrator's decision, for the reasons in P3:
+its counterpart, the existing copy mechanism's "capture", is likewise
+kept out of the sweep). A merge-back writes the live content into the
+integrator's
 working tree and stops. It never commits, never pushes, and never writes
 into a source file that git reports as modified (someone is mid-edit:
 R8).

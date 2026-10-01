@@ -110,6 +110,12 @@ expv "$DST/app/a.conf" merge-back
 act place
 assert "place never touches a merge-back: the live edit stays" \
   has "$(cat "$DST/app/a.conf")" "live edit"
+# A pending merge-back is a FAULT: it is an explicit verb no apply runs,
+# so as drift it would schedule an apply that could never clear it.
+OUT=$("$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a pending merge-back is a FAULT"
+assert "check says what to do" \
+  has "$OUT" "fault  merge-back $DST/app/a.conf: a live edit not yet"
 _head=$(git -C "$TK" rev-parse HEAD)
 act merge-back
 expect_rc 0 "merge-back"

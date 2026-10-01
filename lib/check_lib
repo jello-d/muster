@@ -133,8 +133,14 @@ OVERLAPS
 }
 
 # _ck_placement: config placed as copies (place_lib). What `muster place`
-# or `muster merge-back` repairs is drift; what needs a person is a fault,
-# including every kept (displaced) edit until it is reviewed and cleared.
+# repairs is drift (an integrator's apply runs place). What needs a person
+# is a fault: every kept (displaced) edit until it is cleared, AND every
+# pending merge-back. Merge-back is an EXPLICIT verb, never part of an
+# apply (decided with the integrator, 2026-10-01: an apply that folded
+# live edits into a shared working tree is the anti-pattern placement
+# retires), so calling it drift would schedule an apply that can never
+# clear it. Until it is merged back the edit is not in the source, and
+# the other box will not get it: a person should know.
 _ck_placement() {
   _g_recs=$(placement_records)
   while IFS= read -r _g_r; do
@@ -145,7 +151,8 @@ _ck_placement() {
       in-sync|app-held|unmanaged) ;;
       new|missing|place|converged|migrate|displace|orphan)
         _ck_add drift "place      $_g_v $_g_p" ;;
-      merge-back) _ck_add drift "merge-back $_g_p" ;;
+      merge-back) _ck_add fault "merge-back $_g_p: a live edit not yet" \
+        "in the source; review it, then muster merge-back" ;;
       linked-dir) _ck_add note "place      linked-dir $_g_p: under a" \
         "whole-directory link; migrated by a later increment" ;;
       *) _ck_add fault "place      $_g_v $_g_p" ;;
