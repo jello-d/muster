@@ -52,6 +52,16 @@ Diagnose with nothing, repair with tools.
   exists, that boundary is the enforcement, and a tool honouring it by
   convention would be a soft rule standing where a hard one already is.
 
+## Install
+
+    ./setup.sh install      link bin/muster into ~/.local/bin
+    ./setup.sh check        installed, on PATH, not shadowed, and it runs
+    ./setup.sh uninstall    remove the link, only if it is this tree's
+
+Only the command is linked; it finds `lib/` beside itself through the
+link, so there is nothing else to place. This is the package contract
+tackup installs through.
+
 ## Usage
 
     muster survey                 every repo under ~/src, as a table
