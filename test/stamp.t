@@ -98,6 +98,30 @@ g "$ROOT/two" commit -m local
 chk s5
 expect two verdict moved,superseded
 
+# BEHIND WHEN STAMPED: nothing moves during the run, and the result still
+# does not describe the project's head. Found by a dry run of the release
+# snippet against a real checkout, where the old definition said holds.
+mkrepo late
+upstream_moves late
+g "$ROOT/late" fetch
+take s5b late
+chk s5b
+expect late verdict superseded
+expect_rc 1 "a gate started on a checkout already behind origin"
+# AHEAD (your own unpushed release commit) is what a release looks like.
+mkrepo early
+echo release > "$ROOT/early/VERSION"
+g "$ROOT/early" add VERSION
+g "$ROOT/early" commit -m release
+take s5c early
+chk s5c --fetch
+expect early verdict holds
+expect_rc 0 "ahead of origin: origin's head is inside the tested tree"
+# DIVERGED: ahead AND missing origin's commit.
+upstream_moves early
+chk s5c --fetch
+expect early verdict superseded
+
 # === gone, and what was never there =========================================
 mkrepo three
 take s6 three

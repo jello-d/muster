@@ -280,9 +280,11 @@ their contents), and the upstream head. The check answers per repo:
     holds        nothing recorded has changed
     moved        HEAD is not the stamped commit
     changed      HEAD is, the working tree is not
-    superseded   origin moved past the stamped upstream head: the result
-                 no longer describes the project's head (only as
-                 current as the last fetch; use --fetch, both times)
+    superseded   origin's head is not contained in what was tested: it
+                 moved during the run, or the checkout was already
+                 behind when stamped. Ahead of origin (your own release
+                 commits) is fine. Only as current as the last fetch;
+                 use --fetch, both times
     gone         absent or unreadable now, and was not then
 
 Exit 0 when every repo holds, 1 when any does not, 2 when the stamp is

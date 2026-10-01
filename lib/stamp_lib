@@ -29,9 +29,12 @@
 #   holds        nothing it recorded has changed
 #   moved        HEAD is not the stamped commit
 #   changed      HEAD is, but the working tree is not what was stamped
-#   superseded   origin has moved past the stamped upstream head: the
-#                result no longer describes the project's head. Only as
-#                current as the last fetch; --fetch makes it current
+#   superseded   origin's head is NOT CONTAINED in the tested tree: it
+#                moved during the run, or the checkout was already behind
+#                when stamped. Either way the result does not describe
+#                the project's head. Ahead of origin (your own release
+#                commits) is fine. Only as current as the last fetch;
+#                --fetch makes it current
 #   gone         the repo is absent or unreadable, and was not before
 #
 # Exit 0 every repo holds, 1 any does not, 2 the stamp is unusable.
@@ -105,8 +108,14 @@ _st_check_one() {
   elif [ "$(_st_tree "$_c_path")" != "$_c_tree" ]; then
     _c_v=changed
   fi
-  if [ "$_c_uph" != - ] && [ "$SV_UPHEAD" != - ] \
-    && [ "$SV_UPHEAD" != "$_c_uph" ]; then
+  # BY ANCESTRY, not by "did origin move": a dry run against a real
+  # checkout found one BEHIND origin when stamped, and a check that only
+  # compared origin then-versus-now said `holds` about a gate that had
+  # tested old code. What a release needs is origin's head inside what
+  # was tested.
+  if [ "$SV_UPHEAD" != - ] && ! _st_terminal "$_c_state" \
+    && ! _sv_git "$_c_path" merge-base --is-ancestor "$SV_UPHEAD" \
+      "$_c_head" 2>/dev/null; then
     _c_v="${_c_v:+$_c_v,}superseded"
   fi
   printf 'name=%s verdict=%s head_then=%s head_now=%s' \
