@@ -150,12 +150,28 @@ lie.
 MUST BE TRUE: a merge-back writes the live content into the integrator's
 working tree and stops. It never commits, never pushes, and never writes
 into a source file that git reports as modified (someone is mid-edit:
-R8). It records which source commit the baseline was placed from, so
-"this live file is newer than commit X" is a checkable fact.
+R8).
+
+"Which source commit was this baseline placed from" is a checkable fact,
+DERIVED FROM GIT, never stored: the baseline's content, hashed as a git
+blob, is looked up in that source file's history,
+
+    git log --find-object=<blob> -- <source path>
+
+and the MOST RECENT commit that introduced that blob is the answer: the
+same content can be introduced, changed away and later restored, and the
+lookup lists every such commit, including the ones that removed it. If
+no commit holds it, the file was placed from uncommitted source, and
+that is said rather than guessed. Storing the commit beside the baseline
+would be the second database P2 forbids, free to disagree with the
+history it describes.
 
 WHY: the user's starting position: merging back into the repo makes the
 repo current, at a point in time that can be verified. Leaving it
 uncommitted keeps it reviewable (`git diff`) without a new review step.
+Deriving the commit is the integrator's review point, settled
+2026-10-01: the repo is the source of truth, so "which commit" is a
+`git log` question.
 
 ### P6. A conflict can be resolved with a real three-way merge
 
@@ -199,7 +215,8 @@ deletion of everything.
 ### P9. The map is a few root pairs, declared by the integrator
 
 MUST BE TRUE: the integrator declares SOURCE ROOT to DESTINATION ROOT
-pairs with a policy each, not a per-file list; muster resolves any path
+pairs, each with a DEFAULT policy (per-file overrides: P10), not a
+per-file list; muster resolves any path
 in both directions by longest prefix, and can say, for any destination,
 which source file it comes from.
 
@@ -208,24 +225,47 @@ tree maps file for file onto `~/.config`), so a per-file map would be a
 second copy of the tree, free to drift. A resolver answers the user's
 "take a full path and resolve it to where it lives".
 
+THE INVENTORY IS THE INTEGRATOR'S, and comes BEFORE declaration: it
+declares and tracks only config that earns it, never files that merely
+restate an application's defaults (one package found three of its four
+directives were restated defaults). muster places exactly what it is
+given and does not judge what is worth tracking.
+
 LAYERS (several sources for one destination, e.g. a per-host overlay)
 are to be designed into the resolver, with merge-back going to whichever
 layer supplied the file, but not built until a layer is in use.
 
-### P10. Policy is per root, and there are three
+### P10. Three policies: a per-root default, with a per-file override
 
-MUST BE TRUE:
+MUST BE TRUE: each declared root carries a DEFAULT policy, and any file
+within it may OVERRIDE that default, declared by the integrator per file
+(by path). A file's effective policy is its override if it has one, else
+its root's default. The three policies:
 
-    user-editable  full three-way handling, merge-back offered (P3-P6)
-    repo-owned     place overwrites a live edit only by DISPLACING it
-                   first (P4): preserved, verified, reported, recoverable
+    user-editable  ("tracked": live edits flow back) full three-way
+                   handling, merge-back offered (P3-P6)
+    repo-owned     ("untracked": live edits do not flow back) place
+                   overwrites a live edit only by DISPLACING it first
+                   (P4): preserved, verified, reported, recoverable
     app-owned      the application rewrites the file itself: place only
                    when absent (seed), and capture back only explicitly
 
 Anything in a destination with no baseline is UNMANAGED and never
 touched: muster owns only what it placed.
 
-WHY: config ownership already splits this way in the integrator (its
+WHY PER FILE: a root is often MIXED. The integrator's config tree holds
+user-editable and repo-owned files side by side, and splitting the tree
+by policy would reshape the repo to suit the tool. A per-root default
+keeps the common case to one line; the override covers the exceptions
+without a second tree. Settled in the integrator's review, 2026-10-01.
+
+APP-OWNED IS THE INTEGRATOR'S EXISTING COPY-AND-SEED MECHANISM folded in:
+its seed and explicit capture become this policy, while the integrator
+keeps the declarations and any case that is not a placed file (a
+merge into a file the user also edits, such as a bookmarks list keyed by
+label, stays the integrator's).
+
+WHY THREE: config ownership already splits this way in the integrator (its
 app-owned files are copied and seeded, not linked, because the apps
 replace them atomically and break symlinks).
 
@@ -281,7 +321,8 @@ into a git working tree.
 ## Possible shape, non-binding
 
 - A config line per root pair, e.g.
-  `place <source-root> <destination-root> <user-editable|repo-owned|app-owned>`.
+  `place <source-root> <destination-root> <user-editable|repo-owned|app-owned>`,
+  and one per exception, e.g. `policy <destination-path> repo-owned`.
 - Verbs from the problem: one that reports per-file verdicts (the
   placement analogue of `owed`), one that places, one that merges back,
   and `where <path>` for the resolver. Names to be settled.
@@ -291,9 +332,10 @@ into a git working tree.
 
 ## Open questions
 
-- The exact boundary of the first increment: `~/.config` leaf files only,
-  before whole-directory links and `~/bin`.
+- SETTLED 2026-10-01: the first increment is `~/.config` leaf files;
+  whole-directory links and `~/bin` follow.
 - Whether a clean three-way merge may be applied with one explicit
   command, or always written aside for review.
 - How app-owned "capture" relates to merge-back: the same step with a
-  different default, or its own verb.
+  different default, or its own verb. (App-owned is settled as the
+  integrator's copy-and-seed mechanism folded in; P10.)
