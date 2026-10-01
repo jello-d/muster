@@ -214,6 +214,17 @@ template, new template and local modifications, flagging conflicts rather
 than blocking. If that holds up on inspection, R6 through R9 are mostly a
 wrapper around it rather than an implementation.
 
+VERIFIED 2026-09-30, AND NOT ADOPTED. The description above held on every
+point. It is set aside because a vendored copy here is never edited in
+place: the canonical always wins, so the 3-way merge, copier's real value,
+has nothing to merge. What is left (a baseline stamp, refusing a dirty
+tree, per-repo paths) is a small amount of sh around `cp`, while a copier
+wrapper would need guards of its own: a conflict exits 0 with markers
+written into the file and the stamp bumped regardless, a differing file on
+a non-terminal stdin hangs at an overwrite prompt, and once a template
+carries any tag, untagged commits are ignored. Revisit if a vendored
+artifact ever has to carry legitimate local edits.
+
 `pre-commit` solves fan-out better than vendoring does: a repo REFERENCES a
 hook repo at a pinned rev and `autoupdate` bumps the pin, so there is no
 copy to drift. Two caveats for this fleet: it is Python, and it clones hook
