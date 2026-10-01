@@ -75,6 +75,8 @@ tackup installs through.
     muster report                 every profile's latest run, in one view
     muster schedule install       systemd user timers for the profiles
     muster check                  is the profile policy coherent here?
+    muster stamp tackup > s       record the tree before a long run
+    muster stamp check --fetch s  does the result still describe it?
 
 Exit status: 0 when every repo is ok, 1 when anything needs attention,
 2 when the survey could not run at all (bad option, unreadable root or
@@ -260,6 +262,34 @@ config), so writing the config, installing and checking converges.
 Whether repos need ATTENTION is not judged here: that is the fleet's
 state, which `report` and the notifier carry.
 
+### stamp (R11)
+
+A verification that takes longer than the interval between other
+people's commits can finish green about a tree that no longer exists.
+muster cannot prevent that (only a freeze can, and that is a human's
+call); it makes it detectable. Take a stamp before, check it after:
+
+    muster stamp [--fetch] [name...]  > before.stamp
+    ... the long verification ...
+    muster stamp check [--fetch] before.stamp
+
+A stamp records, per repo, HEAD, a fingerprint of everything uncommitted
+(tracked changes staged or not, plus untracked, unignored files and
+their contents), and the upstream head. The check answers per repo:
+
+    holds        nothing recorded has changed
+    moved        HEAD is not the stamped commit
+    changed      HEAD is, the working tree is not
+    superseded   origin moved past the stamped upstream head: the result
+                 no longer describes the project's head (only as
+                 current as the last fetch; use --fetch, both times)
+    gone         absent or unreadable now, and was not then
+
+Exit 0 when every repo holds, 1 when any does not, 2 when the stamp is
+empty, missing or not a stamp: an unusable stamp never reads as "all
+holds". The stamp carries its own paths, so it is checked against the
+tree it named whatever the config says later. Both are read-only.
+
 ### schedule
 
 `muster schedule install|check|remove` turns the profiles into systemd
@@ -332,8 +362,10 @@ skipped line.
 
 ## Status
 
-`survey`, `owed`, `catch-up`, `run`, `report` and `schedule` are
-implemented. Re-seeding vendored
+`survey`, `owed`, `catch-up`, `run`, `report`, `schedule`, `check` and
+`stamp` are implemented: requirements R1 to R11, except that re-seeding
+a vendored file (owed's `reseed`) is reported and not acted on, having
+been needed zero times. Re-seeding vendored
 files (owed's `reseed`) is not: it has been needed zero times so far,
 and copier was verified by hand and set aside (see
 `docs/requirements.md`). Running catch-up on a schedule is the

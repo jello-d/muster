@@ -1,0 +1,218 @@
+# shellcheck shell=sh
+# stamp_lib - R11: is a recorded result still about the tree it was taken
+# on? `muster stamp` records the set; `muster stamp check` says, per repo,
+# whether that record still describes it.
+#
+# Sourced by bin/muster, never executed. READ-ONLY, like the survey.
+#
+# WHY (docs/requirements.md, R11): a 35-minute verification gate went
+# stale TWICE in one afternoon, because another session landed work while
+# it ran. Both times the result was green and described a tree that no
+# longer existed, and it was noticed by hand. muster does not prevent that
+# (only a freeze does, and a freeze is a human's call); it makes it
+# DETECTABLE: stamp before the verification, check the stamp after.
+#
+# WHAT "THE TREE" IS: a verification runs against the working tree, so a
+# stamp is HEAD plus a fingerprint of everything uncommitted (tracked
+# changes, staged or not, and the untracked, unignored files with their
+# contents). And the result is usually wanted for the project's head, not
+# just this checkout, so the upstream head is recorded too.
+#
+# A STAMP RECORD is one line, every key, `-` where none applies:
+#
+#   stamp=1 name taken state head tree upstream upstream_head fetched path
+#
+# A CHECK RECORD, per stamped repo:
+#
+#   name verdict head_then head_now upstream_then upstream_now fetched path
+#
+#   holds        nothing it recorded has changed
+#   moved        HEAD is not the stamped commit
+#   changed      HEAD is, but the working tree is not what was stamped
+#   superseded   origin has moved past the stamped upstream head: the
+#                result no longer describes the project's head. Only as
+#                current as the last fetch; --fetch makes it current
+#   gone         the repo is absent or unreadable, and was not before
+#
+# Exit 0 every repo holds, 1 any does not, 2 the stamp is unusable.
+
+# _st_tree <path>: the fingerprint of everything uncommitted, or `-` when
+# there is no HEAD to diff against. Clean trees all fingerprint alike.
+_st_tree() {
+  _sv_git "$1" rev-parse -q --verify 'HEAD^{commit}' >/dev/null \
+    || { echo -; return 0; }
+  {
+    _sv_git "$1" diff HEAD --binary --no-ext-diff --no-color
+    _sv_git "$1" -c core.quotePath=false ls-files --others \
+      --exclude-standard | while IFS= read -r _t_f; do
+        # ./ rather than an end-of-options marker: a name starting with a
+        # dash is still a path, and the line stays free of a bare `--`.
+        printf '%s %s\n' "$(_sv_git "$1" hash-object "./$_t_f")" "$_t_f"
+      done
+  } | git hash-object --stdin
+}
+
+# stamp_record <name> <path> [<deployed>]: one stamp line.
+stamp_record() {
+  survey_record "$@" >/dev/null
+  _r_tree=-
+  case $SV_STATE in
+    absent*|unreadable*|not-a-repo*|broken*) ;;
+    *) _r_tree=$(_st_tree "$2") ;;
+  esac
+  printf 'stamp=1 name=%s taken=%s state=%s head=%s tree=%s' \
+    "$(_sv_esc "$1")" "$ST_TAKEN" "$SV_STATE" "$SV_HEAD" "$_r_tree"
+  printf ' upstream=%s upstream_head=%s fetched=%s path=%s\n' \
+    "$SV_UP" "$SV_UPHEAD" "$SV_FETCHED" "$(_sv_esc "$2")"
+}
+
+# _st_unesc <percent-encoded>: the inverse of _sv_esc (%20 %09 %0A %25).
+_st_unesc() {
+  printf '%s' "$1" | awk '{
+    s = $0
+    gsub(/%20/, " ", s); gsub(/%09/, "\t", s); gsub(/%0A/, "\n", s)
+    gsub(/%25/, "%", s)
+    printf "%s", s }'
+}
+
+_st_field() {   # <record> <key> -> value
+  printf '%s\n' "$1" | awk -v k="$2" '{
+    for (i = 1; i <= NF; i++) {
+      p = index($i, "=")
+      if (substr($i, 1, p - 1) == k) { print substr($i, p + 1); exit }
+    } }'
+}
+
+_st_terminal() {
+  case $1 in absent*|unreadable*|not-a-repo*|broken*) return 0 ;; esac
+  return 1
+}
+
+# _st_check_one <stamp-record>: the check record for one stamped repo.
+_st_check_one() {
+  _c_name=$(_st_unesc "$(_st_field "$1" name)")
+  _c_path=$(_st_unesc "$(_st_field "$1" path)")
+  _c_state=$(_st_field "$1" state)
+  _c_head=$(_st_field "$1" head)
+  _c_tree=$(_st_field "$1" tree)
+  _c_uph=$(_st_field "$1" upstream_head)
+  survey_record "$_c_name" "$_c_path" >/dev/null
+  _c_v=
+  if _st_terminal "$SV_STATE"; then
+    [ "$SV_STATE" = "$_c_state" ] || _c_v=gone
+  elif _st_terminal "$_c_state" || [ "$SV_HEAD" != "$_c_head" ]; then
+    _c_v=moved
+  elif [ "$(_st_tree "$_c_path")" != "$_c_tree" ]; then
+    _c_v=changed
+  fi
+  if [ "$_c_uph" != - ] && [ "$SV_UPHEAD" != - ] \
+    && [ "$SV_UPHEAD" != "$_c_uph" ]; then
+    _c_v="${_c_v:+$_c_v,}superseded"
+  fi
+  printf 'name=%s verdict=%s head_then=%s head_now=%s' \
+    "$(_sv_esc "$_c_name")" "${_c_v:-holds}" "$(_sv_short "$_c_head")" \
+    "$(_sv_short "$SV_HEAD")"
+  printf ' upstream_then=%s upstream_now=%s fetched=%s path=%s\n' \
+    "$(_sv_short "$_c_uph")" "$(_sv_short "$SV_UPHEAD")" "$SV_FETCHED" \
+    "$(_sv_esc "$_c_path")"
+}
+
+# _st_render <porcelain|table>: exits 1 unless every repo holds.
+_st_render() {
+  awk -v mode="$1" -v now="$(date +%s)" '
+    function age(t, d) {
+      if (t == "-" || t == "never") return t
+      d = now - t
+      if (d < 0) d = 0
+      if (d < 120) return d "s"
+      if (d < 7200) return int(d / 60) "m"
+      if (d < 172800) return int(d / 3600) "h"
+      return int(d / 86400) "d"
+    }
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        p = index($i, "="); f[substr($i, 1, p - 1)] = substr($i, p + 1)
+      }
+      if (!("verdict" in f)) {
+        print "muster: malformed record: " $0 > "/dev/stderr"; bad = 1; next
+      }
+      if (f["verdict"] != "holds") bad = 1
+      if (mode == "porcelain") { print; next }
+      n++; nm[n] = f["name"]; vd[n] = f["verdict"]
+      dt[n] = f["head_then"] " -> " f["head_now"]
+      if (f["upstream_then"] != "-")
+        dt[n] = dt[n] "; origin " f["upstream_then"] " -> " \
+          f["upstream_now"] " (fetched " age(f["fetched"]) ")"
+      if (length(nm[n]) > wn) wn = length(nm[n])
+      if (length(vd[n]) > wv) wv = length(vd[n])
+    }
+    END {
+      if (mode == "table" && n > 0) {
+        if (wn < 4) wn = 4
+        if (wv < 7) wv = 7
+        fmt = "%-" wn "s  %-" wv "s  %s\n"
+        printf fmt, "REPO", "VERDICT", "HEAD; ORIGIN"
+        for (i = 1; i <= n; i++) printf fmt, nm[i], vd[i], dt[i]
+      }
+      exit bad + 0
+    }'
+}
+
+# _st_check [--fetch] [--porcelain] <file|->
+_st_check() {
+  # shellcheck disable=SC2034  # SV_DO_FETCH is read by survey_lib
+  _k_mode=table SV_DO_FETCH=
+  # shellcheck disable=SC2034  # likewise
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --fetch) SV_DO_FETCH=1 ;;
+      --porcelain) _k_mode=porcelain ;;
+      --) shift; break ;;
+      -?*) echo "muster stamp check: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  [ "$#" = 1 ] || { echo "usage: muster stamp check [--fetch]" \
+    "[--porcelain] <file|->" >&2; return 2; }
+  if [ "$1" = - ]; then _k_in=$(cat)
+  else
+    [ -r "$1" ] || { echo "muster: cannot read stamp $1" >&2; return 2; }
+    _k_in=$(cat -- "$1")
+  fi
+  # A stamp that is not one, or is empty, is UNUSABLE, never "all holds".
+  printf '%s\n' "$_k_in" | awk 'NF && $1 != "stamp=1" { bad = 1 }
+    NF { n++ } END { exit (bad || !n) }' \
+    || { echo "muster: $1 is not a muster stamp" >&2; return 2; }
+  survey_config || return 2
+  _k_out=$(printf '%s\n' "$_k_in" | while IFS= read -r _k_l; do
+    [ -z "$_k_l" ] || _st_check_one "$_k_l"
+  done) || { echo "muster: the check itself failed" >&2; return 2; }
+  printf '%s\n' "$_k_out" | _st_render "$_k_mode"
+}
+
+# stamp_main: `stamp [--fetch] [name...]`, or `stamp check ...`.
+stamp_main() {
+  if [ "${1:-}" = check ]; then shift; _st_check "$@"; return; fi
+  # shellcheck disable=SC2034  # SV_DO_FETCH is read by survey_lib
+  SV_DO_FETCH=
+  # shellcheck disable=SC2034  # likewise
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --fetch) SV_DO_FETCH=1 ;;
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster stamp: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  survey_setup "$@" || return 2
+  ST_TAKEN=$(date +%s)
+  _s_out=$(SV_RECORD_FN=stamp_record survey_records "$@") \
+    || { echo "muster: the stamp itself failed" >&2; return 2; }
+  [ -n "$_s_out" ] \
+    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  printf '%s\n' "$_s_out"
+}
