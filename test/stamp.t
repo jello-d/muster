@@ -213,8 +213,13 @@ sleep 1
 touch "$_T/marker"
 take s10 ro
 chk s10
-assert "stamp and check write nothing to the repo" \
-  test -z "$(find "$ROOT/ro" -newer "$_T/marker")"
+# The changed paths go INTO the failure message: this failed once in ~19
+# full-suite runs (2026-10-01) and could not be reproduced, so the next
+# occurrence must say what was written rather than only that something was.
+_ro_new=$(find "$ROOT/ro" -newer "$_T/marker" | sed "s|$ROOT/ro/||" \
+  | tr '\n' ' ')
+assert "stamp and check write nothing to the repo (wrote: $_ro_new)" \
+  test -z "$_ro_new"
 take s11 ro
 assert "two stamps of an unchanged tree differ only in when" \
   test "$(sed 's/ taken=[0-9]*//' "$ST/s10")" \
