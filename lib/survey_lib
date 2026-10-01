@@ -261,6 +261,11 @@ survey_record() {
 #   repo <name> [<path>]     declare the set explicitly; any `repo` line
 #                            turns discovery OFF. path defaults to root/name
 #   deployed <name> <path>   the deployed clone of <name> (the third head)
+#   artifact <canonical> <relpath>... [requires <relpath>...]
+#                            a vendored file: its canonical copy, the
+#                            path(s) a repo may carry it at, and what a
+#                            repo must ALSO carry to count as having
+#                            adopted it (read by owed)
 #
 # Unknown directives FAIL, rather than being skipped: a typo that silently
 # drops a declaration reports a smaller fleet as a healthy one.
@@ -285,7 +290,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       ''|'#'*) continue ;;
       root) [ -n "$_k_a" ] && continue ;;
       repo) [ -n "$_k_a" ] && continue ;;
-      deployed) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
+      deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
     esac
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1
@@ -318,7 +323,7 @@ _sv_cfg() {   # <directive> [<name>] -> the value
 _sv_one() {   # <name>: resolve its path and deployed clone, emit the record
   _o_path=$(_sv_cfg repo "$1") || _o_path=$SV_ROOT/$1
   _o_dep=$(_sv_cfg deployed "$1") || _o_dep=
-  survey_record "$1" "$_o_path" "$_o_dep"
+  "${SV_RECORD_FN:-survey_record}" "$1" "$_o_path" "$_o_dep"
 }
 
 # Discovery: every directory one level under the root that is a repo, AND
@@ -417,8 +422,20 @@ survey_main() {
     esac
     shift
   done
+  survey_setup "$@" || return 2
+  _m_out=$(survey_records "$@") \
+    || { echo "muster: the survey itself failed" >&2; return 2; }
+  [ -n "$_m_out" ] \
+    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  printf '%s\n' "$_m_out" | _sv_render "$SV_MODE"
+}
+
+# survey_setup [name...]: config, root, and the checks that must pass
+# before any record is worth computing. Shared by every verb that walks
+# the set, so each one resolves the set identically.
+survey_setup() {
   for _m_n in "$@"; do
-    [ -n "$_m_n" ] || { echo "muster survey: an empty name" >&2; return 2; }
+    [ -n "$_m_n" ] || { echo "muster: an empty name" >&2; return 2; }
   done
   SV_CONFIG=${MUSTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/muster/repos}
   _sv_cfg_check || return 2
@@ -430,9 +447,4 @@ survey_main() {
     [ -r "$SV_ROOT" ] && [ -x "$SV_ROOT" ] \
       || { echo "muster: cannot read root $SV_ROOT" >&2; return 2; }
   fi
-  _m_out=$(survey_records "$@") \
-    || { echo "muster: the survey itself failed" >&2; return 2; }
-  [ -n "$_m_out" ] \
-    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
-  printf '%s\n' "$_m_out" | _sv_render "$SV_MODE"
 }

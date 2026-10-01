@@ -219,14 +219,6 @@ assert "worktree: has a fetch time" test "$(field wt fetched)" -gt 0
 
 # === R4: unreadable is a third state, never absent ===========================
 
-mkdir -p "$_T/probe"
-chmod 000 "$_T/probe"
-if [ -r "$_T/probe" ]; then
-  CAN_LOCK=''   # running as root: permissions do not bind, so skip these
-else
-  CAN_LOCK=1
-fi
-chmod 755 "$_T/probe"
 
 if [ -n "$CAN_LOCK" ]; then
   mkrepo locked

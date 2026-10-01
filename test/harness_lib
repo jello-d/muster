@@ -43,6 +43,17 @@ cat > "$GIT_CONFIG_GLOBAL" <<'EOF'
 EOF
 ROOT=$_T/src
 
+# CAN_LOCK: whether chmod 000 binds. As root it does not, and the
+# unreadable-state checks are skipped rather than reported as failures.
+mkdir -p "$_T/probe"
+chmod 000 "$_T/probe"
+if [ -r "$_T/probe" ]; then
+  CAN_LOCK=''   # running as root: permissions do not bind, so skip these
+else
+  CAN_LOCK=1
+fi
+chmod 755 "$_T/probe"
+
 # --- harness -----------------------------------------------------------------
 N=0 FAILS=''
 fail() { FAILS="$FAILS
