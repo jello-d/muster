@@ -34,6 +34,12 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/catchup_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/catchup_lib
 . "$MUSTER_LIB/catchup_lib"
+[ -f "$MUSTER_LIB/run_lib" ] \
+  || { echo "muster: $MUSTER_LIB/run_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/run_lib
+. "$MUSTER_LIB/run_lib"
+# The resolved path of this command, so a stored run re-enters it.
+MUSTER_BIN=$(CDPATH='' cd -- "$(dirname -- "$_self")" && pwd -P)/${_self##*/}
 
 usage() {
   cat <<'EOF'
@@ -53,6 +59,13 @@ commands:
          act on owed's pull and rebase verdicts: fast-forward, or
          rebase when no file changed on both sides, each verified after.
          Touches nothing else, and never pushes.
+  run    <profile>
+         run a declared profile and store its records under
+         ~/.local/state/muster/<profile>; what timers call
+  report [--porcelain]
+         every profile's latest stored run: age, status, and the rows
+         that need attention. A run older than twice its interval is
+         stale, and one that never happened says never
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
@@ -64,6 +77,8 @@ case ${1:-} in
   survey) shift; survey_main "$@" ;;
   owed) shift; owed_main "$@" ;;
   catch-up) shift; catchup_main "$@" ;;
+  run) shift; run_main "$@" ;;
+  report) shift; report_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;

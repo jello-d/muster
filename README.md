@@ -61,6 +61,8 @@ Diagnose with nothing, repair with tools.
     muster owed                   what each repo is owed (fetches first)
     muster catch-up --dry-run     what catch-up would do
     muster catch-up               fast-forward and safe-rebase the set
+    muster run <profile>          run a profile and store the result
+    muster report                 every profile's latest run, in one view
 
 Exit status: 0 when every repo is ok, 1 when anything needs attention,
 2 when the survey could not run at all (bad option, unreadable root or
@@ -148,6 +150,36 @@ when every repo ends owing nothing and every action succeeded.
 `ABORT-FAILED` or `REVERT-FAILED` in the result column means a repo was
 left mid-operation and needs a human now.
 
+### Profiles, run and report
+
+A profile names a verb and how often it should run:
+
+    profile <name> <verb> <interval>     verb: survey, owed or catch-up
+                                         interval: 30m, 2h, 1d
+
+With no profile declared there is one default, observe-only: `owed`,
+hourly. Which verb runs unattended is the integrator's choice per
+profile; nothing writes to a working tree unless a profile says
+catch-up.
+
+`muster run <profile>` runs the verb and stores its records, stderr and
+a meta file (`profile verb interval started finished exit host`) under
+`$MUSTER_STATE_DIR` (default `~/.local/state/muster/<profile>/`): a
+`latest.*` set swapped in whole, and a history pruned to `$MUSTER_KEEP`
+(default 48). A lock keeps a timer and a manual run of one profile from
+overlapping; a lock left by a dead process is taken over. The verb's
+exit passes through.
+
+`muster report` shows every profile's latest run: its age, and a status
+of `ok`, `attention`, `failed`, `never` (no stored run) or `stale` (older
+than twice its interval, so whatever should run it has stopped). Below
+that, each profile's rows that need attention, drawn by the verb's own
+renderer. Exit 0 only when every profile is `ok`.
+
+`MUSTER_NOTIFY`, if set, is run as `$MUSTER_NOTIFY <profile> <message>`
+when a profile's set of rows needing attention CHANGES, not on every
+run, so a repo that stays behind does not alert every interval.
+
 ### The porcelain
 
 One line per repo, space-separated `key=value`, every key on every line,
@@ -187,7 +219,8 @@ skipped line.
 
 ## Status
 
-`survey`, `owed` and `catch-up` are implemented. Re-seeding vendored
+`survey`, `owed`, `catch-up`, `run` and `report` are implemented;
+`schedule` (systemd timers for the profiles) is next. Re-seeding vendored
 files (owed's `reseed`) is not: it has been needed zero times so far,
 and copier was verified by hand and set aside (see
 `docs/requirements.md`). Running catch-up on a schedule is the

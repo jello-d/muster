@@ -145,8 +145,9 @@ catchup_record() {
     "$(_sv_esc "$2")"
 }
 
-# _cu_render <porcelain|table>: exits 1 unless every repo ends owing
-# nothing AND every action it took succeeded (or was a dry run).
+# _cu_render <porcelain|table|attention>: exits 1 unless every repo ends owing
+# nothing AND every action it took succeeded (or was a dry run). attention:
+# the table, only the rows that fail the run.
 _cu_render() {
   awk -v mode="$1" '
     {
@@ -161,17 +162,19 @@ _cu_render() {
         bad = 1
         next
       }
-      if (f["remaining"] != "nothing") bad = 1
-      if (f["result"] != "-" && f["result"] != "ok" &&
-          f["result"] != "dry-run") bad = 1
+      rb = (f["remaining"] != "nothing") || (f["result"] != "-" &&
+        f["result"] != "ok" && f["result"] != "dry-run")
+      if (rb) bad = 1
       if (mode == "porcelain") { print; next }
+      if (mode == "flagged") { if (rb) print; next }
+      if (mode == "attention" && !rb) next
       n++
       nm[n] = f["name"]; ac[n] = f["action"]; rs[n] = f["result"]
       fr[n] = f["from"]; to[n] = f["to"]; rm[n] = f["remaining"]
       if (length(nm[n]) > wn) wn = length(nm[n])
     }
     END {
-      if (mode == "table" && n > 0) {
+      if ((mode == "table" || mode == "attention") && n > 0) {
         if (wn < 4) wn = 4
         fmt = "%-" wn "s  %-6s  %-17s  %-12s  %-12s  %s\n"
         printf fmt, "REPO", "ACTION", "RESULT", "FROM", "TO", "REMAINING"

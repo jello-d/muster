@@ -1,0 +1,205 @@
+#!/bin/sh
+# test/profiles.t - `muster run` and `muster report`: profiles, the run
+# store, pruning, the lock, notify-on-change, and a report that says when
+# a run is stale or never happened.
+#
+# Prints `ok   profiles (N checks)` or `FAIL profiles:` and every failure.
+set -u
+
+H_NAME=profiles
+# shellcheck source=SCRIPTDIR/harness_lib
+. "$(dirname -- "$0")/harness_lib"
+
+export MUSTER_STATE_DIR="$_T/state"
+C=$_T/cfg
+mkdir -p "$C"
+S=$MUSTER_STATE_DIR
+
+cli() {
+  OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
+  RC=$?
+  ERR=$(cat "$_T/err")
+}
+pfield() {   # <profile> <key>: from report --porcelain in OUT
+  printf '%s\n' "$OUT" | awk -v p="profile=$1" '$1 == p' | tr ' ' '\n' \
+    | sed -n "s/^$2=//p"
+}
+meta() { sed -n "s/^$2=//p" "$S/$1/latest.meta"; }
+nhist() { find "$S/$1/history" -name '*.meta' | wc -l | tr -d ' '; }
+
+# === the default profile, before and after its first run ===================
+mkrepo one
+cli report --porcelain
+expect_rc 1 "report before any run"
+assert "default profile: owed, hourly" test "$(pfield owed verb)" = owed
+assert "default profile: every 1h" test "$(pfield owed every)" = 1h
+assert "no run yet: never" test "$(pfield owed status)" = never
+
+cli run owed
+expect_rc 0 "run: the verb's exit passes through (clean set)"
+assert "run: records stored" test -s "$S/owed/latest.records"
+assert "run: stderr stored" test -f "$S/owed/latest.err"
+assert "run: meta has the verb" test "$(meta owed verb)" = owed
+assert "run: meta has the exit" test "$(meta owed exit)" = 0
+assert "run: meta has started and finished" \
+  test "$(meta owed finished)" -ge "$(meta owed started)"
+assert "run: one history entry" test "$(nhist owed)" = 1
+assert "run: no temp files left" \
+  test -z "$(find "$S/owed" -name '.run.*')"
+assert "run: no lock left" test ! -e "$S/owed/lock"
+cli report --porcelain
+expect_rc 0 "report after a clean run"
+assert "after a clean run: ok" test "$(pfield owed status)" = ok
+assert "after a clean run: nothing needs attention" \
+  test "$(pfield owed attention)" = 0
+
+# The store holds exactly what the verb prints: one computation.
+_stored=$(cat "$S/owed/latest.records")
+_direct=$("$MUSTER" owed --porcelain --no-fetch 2>/dev/null)
+assert "stored records equal the verb's own output" \
+  test "$_stored" = "$_direct"
+
+# === attention, and the report's own rows ===================================
+upstream_moves one
+cli run owed
+expect_rc 1 "run: attention passes through as 1"
+cli report --porcelain
+assert "report: attention" test "$(pfield owed status)" = attention
+assert "report: one row needs attention" test "$(pfield owed attention)" = 1
+cli report
+assert "report table: the summary header" starts "$OUT" PROFILE
+assert "report table: the profile's section" has "$OUT" "== owed (owed)"
+assert "report table: the row, by owed's own renderer" has "$OUT" "behind 1"
+g "$ROOT/one" pull --ff-only
+
+# === stale, failed, and a run older than it should be ======================
+cli run owed
+sed -i.bak 's/^finished=.*/finished=1000/' "$S/owed/latest.meta"
+rm -f "$S/owed/latest.meta.bak"
+cli report --porcelain
+assert "a run older than twice its interval: stale" \
+  test "$(pfield owed status)" = stale
+expect_rc 1 "report with a stale profile"
+MUSTER_ROOT=$_T/nowhere "$MUSTER" run owed >/dev/null 2>&1
+cli report --porcelain
+assert "a run that could not run: failed" test "$(pfield owed status)" = failed
+assert "failed: exit 2 recorded" test "$(meta owed exit)" = 2
+
+# === declared profiles ======================================================
+printf 'profile watch owed 30m\nprofile sync catch-up 2h\n' > "$C/two"
+printf 'profile look survey 1d\n' >> "$C/two"
+MUSTER_CONFIG=$C/two cli report --porcelain
+assert "declared: three profiles, and no default" \
+  test "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 3
+assert "declared: watch every 30m" test "$(pfield watch every)" = 30m
+assert "declared: the default is gone" test -z "$(pfield owed verb)"
+# A config whose LAST line is not a profile: the AND-list trap that once
+# made every profile vanish under set -e.
+printf 'profile tail owed 1h\nroot %s\n' "$ROOT" > "$C/tail"
+MUSTER_CONFIG=$C/tail cli run tail
+assert "profiles are found when the last line is not one" \
+  test -s "$S/tail/latest.records"
+MUSTER_CONFIG=$C/two cli run owed
+expect_rc 2 "running an undeclared profile"
+assert "an undeclared profile is named" has "$ERR" "no profile 'owed'"
+
+for _bad in 'profile x frobnicate 1h' 'profile x owed 1w' 'profile x owed' \
+    'profile x owed 1h extra' 'profile a/b owed 1h' 'profile .x owed 1h' \
+    'profile x owed h' 'profile x owed 10'; do
+  printf '%s\n' "$_bad" > "$C/bad"
+  MUSTER_CONFIG=$C/bad cli report
+  expect_rc 2 "a bad profile line: $_bad"
+done
+
+# Per-profile choice of what runs unattended: a catch-up profile ACTS.
+mkrepo acted
+upstream_moves acted
+MUSTER_CONFIG=$C/two cli run sync
+assert "a catch-up profile pulls" \
+  test "$(git -C "$ROOT/acted" rev-parse HEAD)" \
+  = "$(git --git-dir="$_T/origins/acted.git" rev-parse main)"
+assert "its stored records are catch-up's" \
+  has "$(cat "$S/sync/latest.records")" "action=pull result=ok"
+# ...and an owed profile does not.
+upstream_moves acted
+_before=$(git -C "$ROOT/acted" rev-parse HEAD)
+MUSTER_CONFIG=$C/two cli run watch
+assert "an owed profile changes nothing" \
+  test "$(git -C "$ROOT/acted" rev-parse HEAD)" = "$_before"
+MUSTER_CONFIG=$C/two cli run look
+assert "a survey profile stores survey records" \
+  has "$(cat "$S/look/latest.records")" "upstream_head="
+g "$ROOT/acted" pull --ff-only
+
+# === pruning ================================================================
+printf 'profile p owed 1h\n' > "$C/p"
+for _i in 1 2 3 4; do MUSTER_CONFIG=$C/p MUSTER_KEEP=2 cli run p; done
+assert "pruned to MUSTER_KEEP" test "$(nhist p)" = 2
+_newest=$(find "$S/p/history" -name '*.meta' | sort -n | tail -n 1)
+assert "the newest run is kept, and is the latest" \
+  cmp -s "$_newest" "$S/p/latest.meta"
+
+# === the lock ===============================================================
+# Held by a live process (this shell): refuse, change nothing.
+mkdir "$S/p/lock"
+echo $$ > "$S/p/lock/pid"
+_m=$(cat "$S/p/latest.meta")
+MUSTER_CONFIG=$C/p cli run p
+expect_rc 2 "a profile already running"
+assert "locked: says so" has "$ERR" "already running"
+assert "locked: the store is untouched" \
+  test "$(cat "$S/p/latest.meta")" = "$_m"
+# Left by a dead process: taken over, and released after.
+sh -c 'exit 0' &
+_dead=$!
+wait "$_dead"
+echo "$_dead" > "$S/p/lock/pid"
+MUSTER_CONFIG=$C/p cli run p
+expect_rc 0 "a stale lock"
+assert "stale lock: says it took over" has "$ERR" "stale lock"
+assert "stale lock: released after" test ! -e "$S/p/lock"
+
+# === notify on CHANGE, not on every run =====================================
+N_LOG=$_T/notified
+cat > "$_T/notifier" <<NOTIFIER
+#!/bin/sh
+printf '%s|%s\n' "\$1" "\$2" >> '$N_LOG'
+NOTIFIER
+chmod +x "$_T/notifier"
+printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' > "$C/n"
+mkrepo nmoved
+nrun() { MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/notifier cli run n; }
+nlines() { [ -f "$N_LOG" ] && wc -l < "$N_LOG" | tr -d ' ' || echo 0; }
+nrun
+assert "clean first run: no notification" test "$(nlines)" = 0
+upstream_moves nmoved
+nrun
+assert "a repo starts needing attention: notified" test "$(nlines)" = 1
+assert "the notification names the profile and the count" \
+  has "$(cat "$N_LOG")" "n|muster n: 1 repo(s) need attention"
+nrun
+assert "the same attention again: NOT notified" test "$(nlines)" = 1
+echo wip >> "$ROOT/nmoved/f"
+nrun
+assert "the verdict changed (pull to skip): notified" test "$(nlines)" = 2
+g "$ROOT/nmoved" checkout -- f
+g "$ROOT/nmoved" pull --ff-only
+nrun
+assert "attention cleared: notified" test "$(nlines)" = 3
+printf '#!/bin/sh\nexit 1\n' > "$_T/badnotifier"
+chmod +x "$_T/badnotifier"
+upstream_moves nmoved
+MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/badnotifier cli run n
+assert "a failing notifier is reported" has "$ERR" "notifier"
+assert "a failing notifier does not lose the run" \
+  has "$(cat "$S/n/latest.records")" "owed=pull"
+
+# === the command line =======================================================
+cli run
+expect_rc 2 "run with no profile"
+cli run a b
+expect_rc 2 "run with two profiles"
+cli report --bogus
+expect_rc 2 "report with an unknown option"
+
+h_verdict

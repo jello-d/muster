@@ -277,6 +277,9 @@ survey_record() {
 #                            fail the run; any OTHER state is a loud
 #                            expect-mismatch (a sealed tree turning
 #                            readable means its wall has a hole)
+#   profile <name> <verb> <interval>
+#                            a scheduled run (see run_lib): verb is
+#                            survey, owed or catch-up; interval 30m, 2h, 1d
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -295,6 +298,18 @@ _sv_tilde() {   # <path> -> leading ~ expanded
   esac
 }
 
+# _sv_cfg_profile <name> "<verb> <interval>": a profile line is sound.
+# The verb list and interval grammar are run_lib's, read through its
+# names so the check and the runner cannot disagree.
+_sv_cfg_profile() {
+  case $1 in ''|*/*|.*) return 1 ;; esac
+  # shellcheck disable=SC2086  # two words, split on purpose
+  set -- $2
+  [ "$#" = 2 ] || return 1
+  case " $RUN_VERBS " in *" $1 "*) ;; *) return 1 ;; esac
+  _rn_seconds "$2" >/dev/null
+}
+
 _sv_cfg_check() {   # validate the whole file before anything is read from it
   [ -e "$SV_CONFIG" ] || return 0
   [ -r "$SV_CONFIG" ] \
@@ -307,6 +322,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       root) [ -n "$_k_a" ] && continue ;;
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
+      profile) _sv_cfg_profile "$_k_a" "$_k_b" && continue ;;
       expect)
         case $_k_b in unreadable|absent) continue ;; esac ;;
     esac
@@ -371,10 +387,11 @@ survey_records() {
   printf '%s\n' "$_s_set" | while read -r _s_n; do _sv_one "$_s_n"; done
 }
 
-# _sv_render <porcelain|table>: records on stdin. Exits 1 when any record
-# is not ok, so the exit status is computed from the very records shown.
-# Over the 50-line guideline on purpose: it is ONE awk program, and
-# splitting it would split the single renderer R10 depends on.
+# _sv_render <porcelain|table|attention>: records on stdin. Exits 1 when any
+# record is not ok, so the exit status is computed from the very records
+# shown. Over the 50-line guideline on purpose: it is ONE awk program, and
+# splitting it would split the single renderer R10 depends on. attention: the
+# table, only the rows that fail the run.
 _sv_render() {
   awk -v mode="$1" -v now="$(date +%s)" '
     function age(t, d) {
@@ -403,8 +420,11 @@ _sv_render() {
         bad = 1
         next
       }
-      if (f["state"] != "ok" && f["state"] != f["expect"]) bad = 1
+      rb = (f["state"] != "ok" && f["state"] != f["expect"])
+      if (rb) bad = 1
       if (mode == "porcelain") { print; next }
+      if (mode == "flagged") { if (rb) print; next }
+      if (mode == "attention" && !rb) next
       n++
       nm[n] = f["name"]; br[n] = f["branch"]; st[n] = f["state"]
       if (f["state"] == f["expect"]) st[n] = st[n] " (expected)"
@@ -415,7 +435,7 @@ _sv_render() {
       if (length(br[n]) > wb) wb = length(br[n])
     }
     END {
-      if (mode == "table" && n > 0) {
+      if ((mode == "table" || mode == "attention") && n > 0) {
         if (wn < 4) wn = 4
         if (wb < 6) wb = 6
         fmt = "%-" wn "s  %-" wb "s  %5s  %6s  %7s  %-7s  %s\n"
@@ -453,6 +473,16 @@ survey_main() {
   printf '%s\n' "$_m_out" | _sv_render "$SV_MODE"
 }
 
+# survey_config: find and validate the config, and resolve the root. No
+# check that the root EXISTS: `run` must be able to start, and store, a
+# run whose verb then fails on a missing root.
+survey_config() {
+  SV_CONFIG=${MUSTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/muster/repos}
+  _sv_cfg_check || return 2
+  SV_ROOT=${MUSTER_ROOT:-}
+  [ -n "$SV_ROOT" ] || SV_ROOT=$(_sv_cfg root) || SV_ROOT=$HOME/src
+}
+
 # survey_setup [name...]: config, root, and the checks that must pass
 # before any record is worth computing. Shared by every verb that walks
 # the set, so each one resolves the set identically.
@@ -460,10 +490,7 @@ survey_setup() {
   for _m_n in "$@"; do
     [ -n "$_m_n" ] || { echo "muster: an empty name" >&2; return 2; }
   done
-  SV_CONFIG=${MUSTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/muster/repos}
-  _sv_cfg_check || return 2
-  SV_ROOT=${MUSTER_ROOT:-}
-  [ -n "$SV_ROOT" ] || SV_ROOT=$(_sv_cfg root) || SV_ROOT=$HOME/src
+  survey_config || return 2
   if [ "$#" = 0 ] && [ -z "$(_sv_cfg repo)" ]; then
     [ -d "$SV_ROOT" ] \
       || { echo "muster: root $SV_ROOT does not exist" >&2; return 2; }

@@ -1,0 +1,288 @@
+# shellcheck shell=sh
+# run_lib - named profiles, a store of every run, and one report over all
+# of them.
+#
+# Sourced by bin/muster, never executed. Decided 2026-10-01 (shared-notes
+# muster.md): muster owns periodic running and tackup declares it, the
+# charon split again. Scheduled and manual runs take this ONE path, so the
+# consolidated report reads one store and cannot disagree with either.
+#
+# A PROFILE is `profile <name> <verb> <interval>` in the config. With none
+# declared there is one default, observe-only: `owed`, hourly. Which verb a
+# profile runs is the integrator's choice, so a profile may run catch-up
+# unattended, but nothing does unless it is declared to.
+#
+# THE STORE, per profile, under $MUSTER_STATE_DIR (default
+# ~/.local/state/muster):
+#
+#   <profile>/latest.records   the verb's porcelain, exactly as printed
+#   <profile>/latest.err       its stderr (fetch failures and the like)
+#   <profile>/latest.meta      key=value: profile verb interval started
+#                              finished exit host
+#   <profile>/history/<started>-<pid>.{records,err,meta}, the newest
+#                              $MUSTER_KEEP (default 48)
+#
+# A RUN THAT CANNOT BE TRUSTED TO HAVE HAPPENED IS REPORTED AS SUCH: a
+# profile with no latest run is `never`, and one older than twice its
+# interval is `stale`. A timer that silently stopped firing is exactly the
+# failure a scheduled checker exists to prevent, so its own absence has
+# to be a finding.
+
+# shellcheck disable=SC2034  # read by survey_lib's config check
+RUN_VERBS='survey owed catch-up'
+
+_rn_state_dir() {
+  _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster
+  printf '%s' "${MUSTER_STATE_DIR:-$_d_base}"
+}
+
+_rn_seconds() {   # <interval> -> seconds; fails on anything else
+  case $1 in
+    ''|*[!0-9mhd]*) return 1 ;;
+    *[0-9]m) printf '%s' $(( ${1%m} * 60 )) ;;
+    *[0-9]h) printf '%s' $(( ${1%h} * 3600 )) ;;
+    *[0-9]d) printf '%s' $(( ${1%d} * 86400 )) ;;
+    *) return 1 ;;
+  esac
+}
+
+# run_profiles: "<name> <verb> <interval>" per declared profile, or the
+# default when none is declared.
+run_profiles() {
+  _f_out=
+  if [ -e "$SV_CONFIG" ]; then
+    # `if`, never `[ ] && printf`: a false AND-list as the loop's last
+    # command makes the whole substitution fail under set -e, whenever
+    # the config's LAST line is not a profile (found by the test suite).
+    _f_out=$(while read -r _f_kw _f_a _f_b || [ -n "$_f_kw" ]; do
+      if [ "$_f_kw" = profile ]; then printf '%s %s\n' "$_f_a" "$_f_b"; fi
+    done < "$SV_CONFIG")
+  fi
+  if [ -n "$_f_out" ]; then printf '%s\n' "$_f_out"
+  else printf 'owed owed 1h\n'
+  fi
+}
+
+_rn_profile() {   # <name> -> "<verb> <interval>"; fails if not declared
+  run_profiles | awk -v n="$1" '$1 == n { print $2, $3; f = 1; exit }
+    END { exit !f }'
+}
+
+# _rn_lock <dir>: one run per profile at a time. The pid is recorded so a
+# lock left by a crashed run is taken over rather than blocking forever.
+_rn_lock() {
+  if mkdir "$1/lock" 2>/dev/null; then echo $$ > "$1/lock/pid"; return 0; fi
+  _l_pid=$(cat "$1/lock/pid" 2>/dev/null) || _l_pid=
+  if [ -n "$_l_pid" ] && kill -0 "$_l_pid" 2>/dev/null; then
+    echo "muster: profile is already running (pid $_l_pid)" >&2
+    return 1
+  fi
+  echo "muster: taking over a stale lock (pid ${_l_pid:-unknown})" >&2
+  echo $$ > "$1/lock/pid"
+}
+
+_rn_unlock() { rm -f "$1/lock/pid"; rmdir "$1/lock" 2>/dev/null || :; }
+
+# _rn_flagged <verb> <records-file>: "<name> <verdict>" for each row that
+# fails the run, sorted. Only the verdict, never a timestamp, so two runs
+# compare equal unless something actually CHANGED. The rows are chosen by
+# the verb's own renderer: one definition of what needs attention.
+_rn_flagged() {
+  case $1 in
+    survey) _rn_r=_sv_render _rn_k='state' ;;
+    owed) _rn_r=_ow_render _rn_k='owed state' ;;
+    catch-up) _rn_r=_cu_render _rn_k='remaining result' ;;
+  esac
+  "$_rn_r" flagged < "$2" 2>/dev/null | awk -v keys="$_rn_k" '{
+    split("", f)
+    for (i = 1; i <= NF; i++) {
+      k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v); f[k] = v
+    }
+    n = split(keys, ks, " ")
+    o = f["name"]
+    for (i = 1; i <= n; i++) o = o " " f[ks[i]]
+    print o
+  }' | sort
+}
+
+# _rn_store <dir> <started> <tmp-prefix>: move a finished run into place.
+# history first, then latest by rename, so a reader of latest.* sees the
+# old run or the new one, never half of each.
+_rn_store() {
+  mkdir -p "$1/history"
+  for _s_x in records err meta; do
+    cp "$3.$_s_x" "$1/history/$2.$_s_x"
+  done
+  for _s_x in records err meta; do
+    mv -f "$3.$_s_x" "$1/latest.$_s_x"
+  done
+  # Prune to the newest $MUSTER_KEEP runs. Names lead with epoch seconds,
+  # so a numeric sort is chronological.
+  _s_keep=${MUSTER_KEEP:-48}
+  # shellcheck disable=SC2012  # names are digits and a fixed suffix
+  ls "$1/history" | sed -n 's/\.meta$//p' | sort -n \
+    | awk -v k="$_s_keep" '{ a[NR] = $0 } END {
+        for (i = 1; i <= NR - k; i++) print a[i] }' \
+    | while read -r _s_old; do
+        rm -f "$1/history/$_s_old.records" "$1/history/$_s_old.err" \
+          "$1/history/$_s_old.meta"
+      done
+}
+
+# _rn_notify <profile> <dir> <previous-flagged>: call $MUSTER_NOTIFY only
+# when the set of rows needing attention CHANGED. A repo that stays
+# behind must not alert every interval, or the alerts get ignored.
+_rn_notify() {
+  [ -n "${MUSTER_NOTIFY:-}" ] || return 0
+  _n_now=$(_rn_flagged "$RN_VERB" "$2/latest.records")
+  [ "$_n_now" != "$3" ] || return 0
+  _n_count=$(printf '%s' "$_n_now" | grep -c . || :)
+  "$MUSTER_NOTIFY" "$1" "muster $1: $_n_count repo(s) need attention" \
+    >/dev/null 2>&1 </dev/null \
+    || echo "muster: notifier $MUSTER_NOTIFY failed" >&2
+}
+
+# run_main <profile>: run it, store it, notify on change; exit as the verb.
+run_main() {
+  [ "$#" = 1 ] && [ -n "$1" ] \
+    || { echo "usage: muster run <profile>" >&2; return 2; }
+  survey_config || return 2
+  _m_p=$(_rn_profile "$1") \
+    || { echo "muster: no profile '$1' (see muster report)" >&2; return 2; }
+  RN_VERB=${_m_p% *} RN_EVERY=${_m_p#* }
+  case $1 in
+    */*|.*) echo "muster: unusable profile name '$1'" >&2; return 2 ;;
+  esac
+  _m_dir=$(_rn_state_dir)/$1
+  case $_m_dir in
+    *\'*) echo "muster: unusable state dir [$_m_dir]" >&2; return 2 ;;
+  esac
+  mkdir -p "$_m_dir" || return 2
+  _rn_lock "$_m_dir" || return 2
+  _m_tmp=$_m_dir/.run.$$
+  # An interrupted run must not leave its lock or temp files behind. The
+  # paths are baked in NOW, as literals, per the house rule on deferred
+  # expansion in a destructive trap (rm -f only, never -r).
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$_m_tmp.records' '$_m_tmp.err' '$_m_tmp.meta' \
+    '$_m_dir/lock/pid'; rmdir '$_m_dir/lock' 2>/dev/null" EXIT
+  _m_prev=
+  [ ! -f "$_m_dir/latest.records" ] \
+    || _m_prev=$(_rn_flagged "$RN_VERB" "$_m_dir/latest.records")
+  _m_start=$(date +%s)
+  _m_rc=0
+  "$MUSTER_BIN" "$RN_VERB" --porcelain >"$_m_tmp.records" \
+    2>"$_m_tmp.err" </dev/null || _m_rc=$?
+  printf 'profile=%s\nverb=%s\ninterval=%s\nstarted=%s\nfinished=%s\n' \
+    "$1" "$RN_VERB" "$RN_EVERY" "$_m_start" "$(date +%s)" >"$_m_tmp.meta"
+  printf 'exit=%s\nhost=%s\n' "$_m_rc" "$(hostname 2>/dev/null || echo -)" \
+    >>"$_m_tmp.meta"
+  _rn_store "$_m_dir" "$_m_start-$$" "$_m_tmp"
+  _rn_notify "$1" "$_m_dir" "$_m_prev"
+  _rn_unlock "$_m_dir"
+  trap - EXIT
+  return "$_m_rc"
+}
+
+_rn_age() {   # <seconds> -> 45s, 12m, 3h, 2d
+  if [ "$1" -lt 120 ]; then printf '%ss' "$1"
+  elif [ "$1" -lt 7200 ]; then printf '%sm' $(( $1 / 60 ))
+  elif [ "$1" -lt 172800 ]; then printf '%sh' $(( $1 / 3600 ))
+  else printf '%sd' $(( $1 / 86400 ))
+  fi
+}
+
+_rn_meta() {   # <meta-file> <key> -> value, or -
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1 | grep . || echo -
+}
+
+# _rn_status <name> <verb> <interval>: one porcelain line for one profile.
+#   never      no stored run
+#   stale      the last run is older than twice the interval: whatever
+#              should be running it has stopped
+#   ok / attention / failed   the last run's exit: 0, 1, anything else
+_rn_status() {
+  _t_dir=$(_rn_state_dir)/$1
+  _t_meta=$_t_dir/latest.meta
+  _t_fin=$(_rn_meta "$_t_meta" finished)
+  _t_exit=$(_rn_meta "$_t_meta" exit)
+  _t_att=-
+  if [ "$_t_fin" = - ]; then
+    _t_st=never
+  else
+    _t_att=$(_rn_flagged "$2" "$_t_dir/latest.records" | grep -c . || :)
+    _t_age=$(( $(date +%s) - _t_fin ))
+    _t_max=$(( $(_rn_seconds "$3") * 2 ))
+    case $_t_exit in
+      0) _t_st=ok ;;
+      1) _t_st=attention ;;
+      *) _t_st=failed ;;
+    esac
+    [ "$_t_age" -le "$_t_max" ] || _t_st=stale
+  fi
+  printf 'profile=%s verb=%s every=%s status=%s finished=%s exit=%s' \
+    "$1" "$2" "$3" "$_t_st" "$_t_fin" "$_t_exit"
+  printf ' attention=%s host=%s\n' "$_t_att" "$(_rn_meta "$_t_meta" host)"
+}
+
+# report_main [--porcelain]: every profile's latest run, in one place.
+# Exit 0 only when every profile's last run is fresh and clean.
+report_main() {
+  _r_mode=table
+  case ${1:-} in
+    --porcelain) _r_mode=porcelain; shift ;;
+    -h|--help) usage; return 0 ;;
+  esac
+  [ "$#" = 0 ] || { echo "usage: muster report [--porcelain]" >&2; return 2; }
+  survey_config || return 2
+  _r_out=$(run_profiles | while read -r _r_n _r_v _r_e; do
+    _rn_status "$_r_n" "$_r_v" "$_r_e"
+  done)
+  if [ "$_r_mode" = porcelain ]; then
+    printf '%s\n' "$_r_out"
+  else
+    _rn_report_table "$_r_out"
+  fi
+  printf '%s\n' "$_r_out" | awk '$4 != "status=ok" { bad = 1 }
+    END { exit bad + 0 }'
+}
+
+# _rn_report_table <status-lines>: the summary, then each profile's rows
+# that need attention, drawn by that verb's own renderer.
+_rn_report_table() {
+  printf '%s\n' "$1" | awk -v now="$(date +%s)" '
+    BEGIN { fmt = "%-12s  %-8s  %-5s  %-6s  %-9s  %s\n"
+            printf fmt, "PROFILE", "VERB", "EVERY", "LAST", "STATUS",
+              "ATTENTION" }
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v); f[k] = v
+      }
+      last = "-"
+      if (f["finished"] != "-") {
+        d = now - f["finished"]
+        last = d < 120 ? d "s" : d < 7200 ? int(d / 60) "m" : \
+          d < 172800 ? int(d / 3600) "h" : int(d / 86400) "d"
+      }
+      printf fmt, f["profile"], f["verb"], f["every"], last, f["status"],
+        f["attention"]
+    }'
+  printf '%s\n' "$1" | while read -r _p_l; do
+    _p_n=$(printf '%s\n' "$_p_l" | tr ' ' '\n' | sed -n 's/^profile=//p')
+    _p_v=$(printf '%s\n' "$_p_l" | tr ' ' '\n' | sed -n 's/^verb=//p')
+    _p_rec=$(_rn_state_dir)/$_p_n/latest.records
+    [ -s "$_p_rec" ] || continue
+    _p_rows=$(_rn_render_attention "$_p_v" < "$_p_rec")
+    [ -n "$_p_rows" ] || continue
+    printf '\n== %s (%s)\n%s\n' "$_p_n" "$_p_v" "$_p_rows"
+  done
+}
+
+_rn_render_attention() {   # <verb>: records on stdin
+  case $1 in
+    survey) _sv_render attention ;;
+    owed) _ow_render attention ;;
+    catch-up) _cu_render attention ;;
+  esac || :
+}

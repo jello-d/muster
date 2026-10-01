@@ -215,10 +215,11 @@ owed_record() {
     "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$(_sv_esc "$2")"
 }
 
-# _ow_render <porcelain|table>: records on stdin; exits 1 unless every
-# repo is owed nothing, so the status is computed from the records shown.
-# Over the 50-line guideline for the same reason as _sv_render: it is one
-# awk program, and splitting it would split the renderer.
+# _ow_render <porcelain|table|attention>: records on stdin; exits 1 unless
+# every repo is owed nothing, so the status is computed from the records
+# shown. Over the 50-line guideline for the same reason as _sv_render: it is
+# one awk program, and splitting it would split the renderer. attention: the
+# table, only the rows that fail the run.
 _ow_render() {
   awk -v mode="$1" -v now="$(date +%s)" '
     function age(t, d) {
@@ -258,8 +259,11 @@ _ow_render() {
         bad = 1
         next
       }
-      if (f["owed"] != "nothing") bad = 1
+      rb = (f["owed"] != "nothing")
+      if (rb) bad = 1
       if (mode == "porcelain") { print; next }
+      if (mode == "flagged") { if (rb) print; next }
+      if (mode == "attention" && !rb) next
       n++
       nm[n] = f["name"]; ow[n] = f["owed"]; fe[n] = age(f["fetched"])
       wy[n] = why()
@@ -267,7 +271,7 @@ _ow_render() {
       if (length(ow[n]) > wo) wo = length(ow[n])
     }
     END {
-      if (mode == "table" && n > 0) {
+      if ((mode == "table" || mode == "attention") && n > 0) {
         if (wn < 4) wn = 4
         if (wo < 4) wo = 4
         fmt = "%-" wn "s  %-" wo "s  %7s  %s\n"
