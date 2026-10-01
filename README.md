@@ -309,6 +309,7 @@ root pairs and per-file overrides:
 
     place <source-root> <dest-root> <user-editable|repo-owned|app-owned>
     policy <dest-path> <user-editable|repo-owned|app-owned>
+    capture <dest-dir>     an application creates files here (P10)
 
 Each file has three versions: the source (the integrator's working tree;
 tracked and new files, never gitignored ones), the live copy, and the
@@ -319,13 +320,18 @@ stored. The commands:
     muster placed [--porcelain] [path...]    each file's verdict
     muster place [--dry-run] [path...]       place what is owed
     muster merge-back [--dry-run] [path...]  live edits into the source
+    muster capture [--dry-run] [path...]     an app's work into the source
     muster where <path>                      source <-> destination
     muster displaced [list | clear ...]      repo-owned edits kept aside
 
 Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),
 `place`, `converged`, `migrate` (a symlink into its own source becomes a
-copy), `merge-back`, `displace`, `orphan`, `app-held`, `conflict`,
-`foreign`, `linked-dir`, `read-only`, `unreadable`, `no-source`.
+copy), `migrate-dir` (a whole-directory link into its own source
+becomes a real directory; files the link showed that are not source are
+kept as unmanaged copies and named), `merge-back`, `capture`,
+`displace`, `orphan`, `app-held`, `conflict`, `shadowed`, `foreign`,
+`linked-dir` (a directory link to anywhere else: never touched),
+`read-only`, `unreadable`, `no-source`.
 
 No edit is lost under any policy. `place` never overwrites a
 user-editable live edit (that is a merge-back or a conflict); it
@@ -415,10 +421,10 @@ skipped line.
 
 ## Status
 
-PLACEMENT, first increment (leaf files) BUILT: config placed as copies
-with drift detection and merge-back, replacing symlinks into source;
-requirements in `docs/placement.md`. Not yet: whole-directory links
-(reported as `linked-dir`), overlay layers, the three-way merge (P6).
+PLACEMENT BUILT through increment 2: leaf files, whole-directory links
+(migrated), and capture directories; requirements in
+`docs/placement.md`. Not yet: `~/bin`, overlay layers, the three-way
+merge (P6).
 
 `survey`, `owed`, `catch-up`, `run`, `report`, `schedule`, `check` and
 `stamp` are implemented: requirements R1 to R11, except that re-seeding

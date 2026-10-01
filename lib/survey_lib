@@ -302,6 +302,10 @@ survey_record() {
 #                            name. None: the whole set
 #   place <source-root> <dest-root> <policy>
 #   policy <dest-path> <policy>
+#   capture <dest-dir>       a directory an APPLICATION writes into (new
+#                            files, changes): its files are app-owned, and
+#                            what the app wrote is a `capture` verdict,
+#                            folded into the source by `muster capture`
 #                            config placed as COPIES (place_lib, and
 #                            docs/placement.md); policy is user-editable,
 #                            repo-owned or app-owned
@@ -387,6 +391,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
         [ -n "$_k_a" ] && [ "$#" = 2 ] \
           && case " $PL_POLICIES " in *" $2 "*) true ;; *) false ;; esac \
           && continue ;;
+      capture) [ -n "$_k_a" ] && [ -z "$_k_b" ] && continue ;;
       policy)
         [ -n "$_k_a" ] \
           && case " $PL_POLICIES " in *" $_k_b "*) true ;; *) false ;; esac \
@@ -420,11 +425,31 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
   _sv_cfg_policies
 }
 
+# _sv_cfg_under <directive>: every path that directive names must sit
+# under a declared `place` root, and appear once: otherwise the line could
+# never take effect, or could take one of two.
+_sv_cfg_under() {
+  _u_list=$(_sv_cfg_all "$1" | while IFS= read -r _u_p; do
+    _sv_tilde "$_u_p"; echo; done | sed 's|/*$||')
+  [ -n "$_u_list" ] || return 0
+  _u_twice=$(printf '%s\n' "$_u_list" | sort | uniq -d | head -n 1)
+  [ -z "$_u_twice" ] || { echo "muster: two $1 lines for $_u_twice" >&2
+    return 1; }
+  _u_roots=$(_pl_roots | awk '{ print $2 }')
+  _u_orph=$(printf '%s\n' "$_u_list" | while IFS= read -r _u_p; do
+    printf '%s\n' "$_u_roots" | awk -v p="$_u_p" '
+      index(p, $0 "/") == 1 { f = 1 } END { exit !f }' || echo "$_u_p"
+  done | head -n 1)
+  [ -z "$_u_orph" ] || { echo "muster: $1 for $_u_orph, which is under" \
+    "no place root, so it would never apply" >&2; return 1; }
+}
+
 # _sv_cfg_policies: a `policy` line must be able to take effect. One
 # naming a path under no `place` root, or a second line for the same
 # path, would be a decision recorded that silently does nothing, or does
 # one of two things; both are refused.
 _sv_cfg_policies() {
+  _sv_cfg_under capture || return 1
   _k_pol=$(while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     if [ "$_k_kw" = policy ]; then _sv_tilde "$_k_a"; echo; fi
   done < "$SV_CONFIG")

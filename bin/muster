@@ -104,6 +104,9 @@ commands:
   merge-back [--dry-run] [path...]
          fold user-editable live edits into the source working tree;
          never commits, never writes a source file git reports modified
+  capture [--dry-run] [path...]
+         fold an application's new or changed files (under a `capture`
+         directory) into the source working tree; never commits
   where  <path>
          which source a destination comes from, or the reverse
   displaced [list | clear <run> <path>... | clear --all]
@@ -127,6 +130,7 @@ case ${1:-} in
   placed) shift; placed_main "$@" ;;
   place) shift; place_main "$@" ;;
   merge-back) shift; merge_back_main "$@" ;;
+  capture) shift; capture_main "$@" ;;
   where) shift; where_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
   help|-h|--help) usage ;;

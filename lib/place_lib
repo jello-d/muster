@@ -40,10 +40,15 @@
 #   shadowed    a source file whose destination falls under a MORE
 #               SPECIFIC declared root: that root owns the path (P9's
 #               longest prefix), so this one never acts on it. A fault
-#   linked-dir  a directory between the destination root and the file is
-#               itself a symlink (the whole-directory link model): the live
-#               file IS some other file, so nothing here is acted on. The
-#               next increment migrates these; this one only names them
+#   migrate-dir a directory between the destination root and the file is a
+#               symlink into its OWN source directory (the whole-directory
+#               link model): `place` replaces the link with a real directory
+#               (P12), keeping every file the link showed, source or not
+#   linked-dir  a directory between the root and the file is a symlink
+#               anywhere ELSE: someone else's tree, never acted on (a fault)
+#   capture     under a `capture` directory (one an APPLICATION writes
+#               into): a file the app created, or changed since it was
+#               placed. `muster capture` folds it into the source
 #   unreadable  could not look (R4)
 #   no-source   the source root is missing, empty or unreadable: a FAULT,
 #               and nothing under it is placed or removed (P8's guard)
@@ -138,6 +143,32 @@ _pl_owned_elsewhere() {   # <dest> <inner-roots>: under a more specific root?
   }
 }
 
+# _pl_captures: every `capture` directory, tilde-expanded, no trailing /.
+_pl_captures() { _sv_cfg_all capture | while IFS= read -r _a_c; do
+  _sv_tilde "$_a_c" | sed 's|/*$||'; echo; done | grep . || :; }
+
+_pl_in_capture() {   # <dest>: under a `capture` directory?
+  _pl_captures | {
+    while IFS= read -r _c_d; do
+      case $1 in "$_c_d"/*) exit 0 ;; esac
+    done
+    exit 1
+  }
+}
+
+# _pl_captured_live <dest-root>: live files under the capture directories
+# inside this root, relative to it. A capture directory is where an
+# application CREATES files, so a live file there with no source and no
+# baseline is the app's new work, not an unmanaged stranger.
+_pl_captured_live() {
+  _pl_captures | while IFS= read -r _l_c; do
+    case $_l_c in "$1"/*|"$1") ;; *) continue ;; esac
+    [ -d "$_l_c" ] && [ ! -h "$_l_c" ] || continue
+    (cd "$_l_c" && find . -type f ! -name "*$PL_TMP.*") \
+      | sed "s|^\./|${_l_c#"$1"/}/|"
+  done
+}
+
 # _pl_baselines <dest-root>: every tracked destination under it, as a
 # path relative to the root, read from the mirror.
 _pl_baselines() {
@@ -150,19 +181,37 @@ _pl_baselines() {
 # (the verdict), PL_POL (effective policy), PL_S, PL_D, PL_M (source,
 # destination and mirror paths). The whole of P3, P8 and P10, in one place.
 _pl_verdict() {
-  PL_S=$1/$4 PL_D=$2/$4 PL_DR=$2
+  PL_S=$1/$4 PL_D=$2/$4 PL_DR=$2 PL_SR=$1 PL_RP=$3
   PL_M=$(_pl_state)/root$PL_D
   PL_POL=$(_pl_policy "$PL_D" "$3")
+  # Decided BEFORE any early return, so every verdict reports the policy
+  # that governs the file (a capture directory's file read user-editable
+  # while still behind its directory link).
+  _v_cap=''
+  if _pl_capture_file "$PL_D"; then _v_cap=1 PL_POL=app-owned; fi
   _v_s='' _v_b='' _v_l=''
   [ -f "$PL_S" ] && _v_s=1
   [ -f "$PL_M" ] && _v_b=1
-  if _pl_under_link "$PL_D" "$2"; then PL_V=linked-dir; return 0; fi
+  if _pl_under_link "$PL_D" "$2"; then
+    # Its OWN source directory: migratable (P12). Anything else: not ours.
+    if [ "$(readlink -f -- "$PL_LDIR" 2>/dev/null)" \
+      = "$(readlink -f -- "$1/${PL_LDIR#"$2"/}" 2>/dev/null)" ]; then
+      PL_V=migrate-dir
+    else
+      PL_V=linked-dir
+    fi
+    return 0
+  fi
   if [ -h "$PL_D" ]; then
     _pl_symlink "$1"; return 0
   fi
   if [ -e "$PL_D" ]; then
     [ -f "$PL_D" ] && [ -r "$PL_D" ] || { PL_V=unreadable; return 0; }
     _v_l=1
+  fi
+  if [ -n "$_v_cap" ]; then
+    _pl_capture_v "$_v_s" "$_v_b" "$_v_l"
+    return 0
   fi
   if [ -z "$_v_s" ]; then _pl_gone "$_v_b" "$_v_l"; return 0; fi
   if [ "$PL_POL" = app-owned ]; then
@@ -207,17 +256,57 @@ _pl_gone() {
   fi
 }
 
+# _pl_capture_file <dest>: governed by a capture directory, and NOT by a
+# per-file `policy` line (an explicit per-file policy always wins).
+_pl_capture_file() {
+  _pl_in_capture "$1" || return 1
+  # Explicit exits: a loop that finds nothing must not report a match (the
+  # same trap as _pl_owned_elsewhere: a while loop's status is its last
+  # command's).
+  _sv_cfg_all policy | {
+    while IFS= read -r _f_p; do
+      [ "$(_sv_tilde "$_f_p")" != "$1" ] || exit 1
+    done
+    exit 0
+  }
+}
+
+# _pl_capture_v <source?> <baseline?> <live?>: a capture directory. Like
+# user-editable (P4: nothing overwritten, both-changed is a conflict), but
+# the app's work flows back by CAPTURE, and a live file with no source and
+# no baseline is the app's new file, not unmanaged.
+_pl_capture_v() {
+  if [ -z "$1" ]; then
+    if [ -z "$2" ]; then PL_V=capture       # the app created it
+    elif [ -z "$3" ] || _pl_same "$PL_D" "$PL_M"; then PL_V=orphan
+    else PL_V=conflict
+    fi
+    return 0
+  fi
+  if [ -z "$2" ]; then
+    if [ -z "$3" ]; then PL_V=new
+    elif _pl_same "$PL_D" "$PL_S"; then PL_V=converged
+    else PL_V=conflict
+    fi
+    return 0
+  fi
+  [ -n "$3" ] || { PL_V=missing; return 0; }
+  _pl_three
+  [ "$PL_V" != merge-back ] || PL_V=capture
+}
+
 # _pl_under_link <dest> <dest-root>: is any directory BETWEEN the root and
-# the file a symlink? Then the "live" file is another file seen through it
-# (found live: a whole-directory link made its file read as converged,
-# which would have recorded a baseline for a file still linked to source).
+# the file a symlink? Sets PL_LDIR to the OUTERMOST such directory. Then
+# the "live" file is another file seen through it (found live: a
+# whole-directory link made its file read as converged, which would have
+# recorded a baseline for a file still linked to source).
 _pl_under_link() {
-  _u_d=$(dirname -- "$1")
+  _u_d=$(dirname -- "$1") PL_LDIR=
   while [ "$_u_d" != "$2" ] && [ "$_u_d" != / ] && [ "$_u_d" != . ]; do
-    [ ! -h "$_u_d" ] || return 0
+    [ ! -h "$_u_d" ] || PL_LDIR=$_u_d
     _u_d=$(dirname -- "$_u_d")
   done
-  return 1
+  [ -n "$PL_LDIR" ]
 }
 
 # _pl_symlink <source-root>: the live path is a symlink. Into its OWN
@@ -241,7 +330,8 @@ _pl_writable() {
 
 _pl_drift_verdict() {
   case $1 in
-    new|missing|place|converged|migrate|merge-back|displace|orphan)
+    new|missing|place|converged|migrate|migrate-dir|merge-back|displace|\
+    orphan|capture)
       return 0 ;;
   esac
   return 1
@@ -271,7 +361,8 @@ placement_records() {
       continue
     fi
     _e_in=$(_pl_inner "$_e_dst")
-    { _pl_sources "$_e_src"; _pl_baselines "$_e_dst"; } | sort -u \
+    { _pl_sources "$_e_src"; _pl_baselines "$_e_dst"
+      _pl_captured_live "$_e_dst"; } | sort -u \
       | while IFS= read -r _e_rel; do
           [ -n "$_e_rel" ] || continue
           if _pl_owned_elsewhere "$_e_dst/$_e_rel" "$_e_in"; then
@@ -401,7 +492,8 @@ _pl_walk() {
       continue
     fi
     _w_in=$(_pl_inner "$_w_dst")
-    { _pl_sources "$_w_src"; _pl_baselines "$_w_dst"; } | sort -u \
+    { _pl_sources "$_w_src"; _pl_baselines "$_w_dst"
+      _pl_captured_live "$_w_dst"; } | sort -u \
       | while IFS= read -r _w_rel; do
           [ -n "$_w_rel" ] || continue
           # Owned by a more specific root: never this root's to act on.
@@ -424,7 +516,9 @@ _pl_selected() {   # <dest> [path...]: no paths selects everything
 }
 
 _pl_place_cb() {
-  _pl_drift_verdict "$PL_V" && [ "$PL_V" != merge-back ] || return 0
+  _pl_drift_verdict "$PL_V" || return 0
+  case $PL_V in merge-back|capture) return 0 ;; esac
+  if [ "$PL_V" = migrate-dir ]; then _pl_migrate_cb; return; fi
   if ! _pl_writable "$PL_D"; then
     printf 'read-only  %s: not writable by this user; reported only\n' \
       "$PL_D"; return 0
@@ -452,6 +546,87 @@ _pl_merge_cb() {
   fi
 }
 
+# _pl_migrate_cb: P12 for a whole-directory link. The first file met under
+# an own-source directory link migrates the WHOLE directory; the file is
+# then judged again on the real directory and acted on like any other.
+_pl_migrate_cb() {
+  if [ -n "$PL_DRY" ]; then
+    printf 'would migrate-dir %s (for %s)\n' "$PL_LDIR" "$PL_D"; return 0
+  fi
+  _pl_migrate_dir "$PL_LDIR" \
+    || { printf 'FAILED     migrate-dir %s\n' "$PL_LDIR"
+         echo x >> "$PL_FAILS"; return 0; }
+  _pl_verdict "$PL_SR" "$PL_DR" "$PL_RP" "${PL_D#"$PL_DR"/}"
+  _pl_drift_verdict "$PL_V" || return 0
+  if _pl_act_one; then printf '%-10s %s\n' "$PL_V" "$PL_D"
+  else printf 'FAILED     %s %s\n' "$PL_V" "$PL_D"; echo x >> "$PL_FAILS"
+  fi
+}
+
+# _pl_migrate_dir <link>: replace a directory symlink with a REAL directory
+# holding a verified copy of everything visible through it. Files that are
+# not source (an application's runtime files, gitignored in the source
+# tree) are KEPT as unmanaged copies and named, never dropped: they would
+# otherwise vanish the moment the link goes (P12). Built beside the link,
+# verified, and only then swapped in.
+_pl_migrate_dir() {
+  [ -h "$1" ] && [ -d "$1" ] || return 1
+  _g_tmp=$(dirname -- "$1")/.${1##*/}$PL_TMP.$$
+  case $_g_tmp in *"$PL_TMP".*) ;; *) return 1 ;; esac
+  mkdir -- "$_g_tmp" || return 1
+  if ! (cd "$1/" && find . -type f) | while IFS= read -r _g_f; do
+      _g_f=${_g_f#./}
+      _pl_put "$1/$_g_f" "$_g_tmp/$_g_f" || exit 1
+      _pl_is_source "$1/$_g_f" \
+        || printf 'kept       %s (not source: unmanaged)\n' \
+             "$1/$_g_f"
+    done; then
+    _pl_rm_tmpdir "$_g_tmp"
+    printf 'FAILED     copying %s; the link is left as it was\n' "$1"
+    return 1
+  fi
+  rm -f -- "$1" && mv -- "$_g_tmp" "$1" && [ -d "$1" ] && [ ! -h "$1" ] \
+    && printf 'migrated   %s (directory link replaced by copies)\n' "$1"
+}
+
+# _pl_rm_tmpdir <dir>: remove a half-built migration directory, and ONLY
+# that: the path must carry the temp marker, and removal is file by file
+# then empty directory by directory, never `rm -rf` on a variable (the
+# house rule; a failure path is where a wrong value does the most harm).
+_pl_rm_tmpdir() {
+  case ${1##*/} in .*"$PL_TMP".*) ;; *) return 1 ;; esac
+  [ -d "$1" ] && [ ! -h "$1" ] || return 1
+  find "$1" -type f -exec rm -f {} + 2>/dev/null
+  find "$1" -depth -type d -exec rmdir {} + 2>/dev/null
+  [ ! -e "$1" ]
+}
+
+# _pl_is_source <path seen through a dir link>: tracked or new-unignored in
+# the source's git work tree.
+_pl_is_source() {
+  _i_real=$(readlink -f -- "$1") || return 1
+  git -C "$(dirname -- "$_i_real")" ls-files --error-unmatch --cached \
+    --others --exclude-standard -- "$_i_real" >/dev/null 2>&1
+}
+
+# _pl_capture_cb: an application's new or changed file, into the source
+# WORKING TREE. Explicit, like merge-back, and with its guards: never
+# committing, never over a source file git reports modified.
+_pl_capture_cb() {
+  [ "$PL_V" = capture ] || return 0
+  if [ -e "$PL_S" ] && [ -n "$(git -C "$(dirname -- "$PL_S")" status \
+      --porcelain -- "$PL_S" 2>/dev/null)" ]; then
+    printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
+      "$PL_D" "$PL_S"; return 0
+  fi
+  if [ -n "$PL_DRY" ]; then printf 'would capture %s -> %s\n' \
+    "$PL_D" "$PL_S"; return 0; fi
+  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
+    printf 'captured   %s -> %s\n' "$PL_D" "$PL_S"
+  else printf 'FAILED     capture %s\n' "$PL_D"; echo x >> "$PL_FAILS"
+  fi
+}
+
 # _pl_act_main <callback> [--dry-run] [path...]: run the walk, then judge
 # what remains with a FRESH read. Exit 0 when everything is in sync, 1
 # when anything is left, 2 when a write failed or could not be made.
@@ -474,6 +649,7 @@ _pl_act_main() {
 }
 
 place_main() { _pl_act_main _pl_place_cb "$@"; }
+capture_main() { _pl_act_main _pl_capture_cb "$@"; }
 merge_back_main() { _pl_act_main _pl_merge_cb "$@"; }
 
 # placed_main [--porcelain] [path...]: every managed file and its verdict.

@@ -53,6 +53,7 @@ expv() {   # <dest path> <verdict>: one check
   [ "$_e_got" = "$2" ] || fail "${1#"$DST"/}: verdict [$_e_got], want [$2]"
 }
 same() { cmp -s "$1" "$2"; }
+lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 # === before anything is placed ===============================================
@@ -266,23 +267,197 @@ assert "a foreign symlink is left exactly as it is" \
 rm -f "$DST/app/b.conf"
 act place
 
-# A WHOLE-DIRECTORY link: the file below it is the source itself, seen
-# through the link. Found live; it read as converged. Named, never acted on.
+# === increment 2: whole-directory links are MIGRATED (P12) =================
+# A directory link into its OWN source directory: the directory becomes a
+# real one, source files placed with baselines, and a non-source file the
+# link showed (an app's runtime file, gitignored) is KEPT, not dropped.
 mkdir -p "$SRC/dirlinked"
 echo 'via a dir link' > "$SRC/dirlinked/d.conf"
 g "$TK" add -A; g "$TK" commit -m dirlinked
+echo 'runtime state' > "$SRC/dirlinked/state.log"   # ignored: not source
 ln -s "$SRC/dirlinked" "$DST/dirlinked"
 pl
-expv "$DST/dirlinked/d.conf" linked-dir
+expv "$DST/dirlinked/d.conf" migrate-dir
+act place --dry-run
+assert "dry-run: the directory link is still a link" test -h "$DST/dirlinked"
 act place
-assert "linked-dir: the directory link is left as it is" \
-  test -h "$DST/dirlinked"
-assert "linked-dir: no baseline is recorded" test ! -e "$MIR/dirlinked/d.conf"
-OUT=$("$MUSTER" check 2>&1)
-assert "check: a linked-dir is a NOTE, not a fault" \
-  has "$OUT" "note   place      linked-dir $DST/dirlinked/d.conf"
-rm -f "$DST/dirlinked"
-g "$TK" rm -q -r link/config/dirlinked; g "$TK" commit -m undirlink
+expect_rc 0 "place migrates a directory link"
+assert "migrate-dir: the link is now a REAL directory" \
+  test -d "$DST/dirlinked" -a ! -h "$DST/dirlinked"
+assert "migrate-dir: the source file is a placed copy" \
+  same "$SRC/dirlinked/d.conf" "$DST/dirlinked/d.conf"
+assert "migrate-dir: with its baseline" \
+  same "$SRC/dirlinked/d.conf" "$MIR/dirlinked/d.conf"
+assert "migrate-dir: the NON-source file was kept, not dropped" \
+  test "$(cat "$DST/dirlinked/state.log")" = 'runtime state'
+assert "migrate-dir: and it was named as kept" \
+  has "$OUT" "kept       $DST/dirlinked/state.log (not source: unmanaged)"
+assert "migrate-dir: no baseline for the non-source file" \
+  test ! -e "$MIR/dirlinked/state.log"
+assert "migrate-dir: the source tree itself is untouched" \
+  test -f "$SRC/dirlinked/state.log"
+assert "migrate-dir: no temp left beside it" \
+  test -z "$(find "$DST" -maxdepth 1 -name '*muster-tmp*')"
+pl
+expv "$DST/dirlinked/d.conf" in-sync
+# A copy that fails mid-migration leaves the link EXACTLY as it was. Its
+# own corrupting cp: the shared stub is defined later in this file, and a
+# test that silently ran the REAL cp here once passed for that reason.
+mkdir -p "$_T/migcp"
+# shellcheck disable=SC2016  # writing a script: its $ must stay literal
+printf '#!/bin/sh\n"%s" "$@" || exit\nfor _a; do _l=$_a; done\n%s\n' \
+  "$(command -v cp)" 'case $_l in *muster-tmp*) printf x > "$_l" ;; esac' \
+  > "$_T/migcp/cp"
+chmod +x "$_T/migcp/cp"
+mkdir -p "$SRC/dirlinked2"
+echo two > "$SRC/dirlinked2/e.conf"
+g "$TK" add -A; g "$TK" commit -m dirlinked2
+ln -s "$SRC/dirlinked2" "$DST/dirlinked2"
+OUT=$(PATH="$_T/migcp:$PATH" "$MUSTER" place "$DST/dirlinked2" 2>&1); RC=$?
+expect_rc 2 "a failed copy during migration is a failed write"
+assert "and the directory link is left exactly as it was" \
+  test -h "$DST/dirlinked2"
+assert "and no half-built directory is left beside it" \
+  test -z "$(find "$DST" -maxdepth 1 -name '*muster-tmp*')"
+act place
+assert "the next place migrates it" test ! -h "$DST/dirlinked2"
+# A directory link to somewhere ELSE is not ours: named, never touched.
+mkdir -p "$SRC/elsedir" "$_T/someone-else"
+echo mine > "$SRC/elsedir/f.conf"
+g "$TK" add -A; g "$TK" commit -m elsedir
+echo theirs > "$_T/someone-else/f.conf"
+ln -s "$_T/someone-else" "$DST/elsedir"
+pl
+expv "$DST/elsedir/f.conf" linked-dir
+act place
+assert "a foreign directory link is left alone" \
+  test "$(readlink "$DST/elsedir")" = "$_T/someone-else"
+OUT=$("$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a foreign directory link is a FAULT"
+rm -f "$DST/elsedir"
+g "$TK" rm -q -r link/config/elsedir; g "$TK" commit -m unelse
+act place
+
+# === increment 2: capture, for directories an APPLICATION writes into ======
+mkdir -p "$SRC/kprof"
+echo 'layout one' > "$SRC/kprof/one.conf"
+g "$TK" add -A; g "$TK" commit -m kprof
+printf 'capture %s/kprof\n' "$DST" >> "$MUSTER_CONFIG"
+act place
+assert "capture dir: seeded from source" same "$SRC/kprof/one.conf" \
+  "$DST/kprof/one.conf"
+assert "capture dir: its files are app-owned" \
+  has "$("$MUSTER" placed --porcelain)" \
+  "kprof/one.conf verdict=in-sync policy=app-owned"
+# The app CREATES a file.
+echo 'layout two' > "$DST/kprof/two.conf"
+pl
+expv "$DST/kprof/two.conf" capture
+act place
+assert "place never takes an app's new file" test ! -e "$SRC/kprof/two.conf"
+expect_rc 1 "place with a capture pending: something left, nothing failed"
+assert "place does not even try (no FAILED)" lacks "$OUT" FAILED
+OUT=$("$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a pending capture is a FAULT"
+assert "check says what to do" \
+  has "$OUT" "fault  capture    $DST/kprof/two.conf"
+_head=$(git -C "$TK" rev-parse HEAD)
+act capture
+expect_rc 0 "capture"
+assert "capture: the app's new file is in the source working tree" \
+  same "$DST/kprof/two.conf" "$SRC/kprof/two.conf"
+assert "capture: NOT committed" test "$(git -C "$TK" rev-parse HEAD)" = "$_head"
+assert "capture: with a baseline" same "$DST/kprof/two.conf" \
+  "$MIR/kprof/two.conf"
+pl
+expv "$DST/kprof/two.conf" in-sync
+g "$TK" add -A; g "$TK" commit -m captured
+# The app CHANGES a captured file.
+echo 'layout one, adjusted' > "$DST/kprof/one.conf"
+pl
+expv "$DST/kprof/one.conf" capture
+act capture
+assert "capture: an app's change reaches the source" \
+  same "$DST/kprof/one.conf" "$SRC/kprof/one.conf"
+g "$TK" commit -am adjusted
+# The OTHER box captured and committed: the change arrives by place.
+echo 'layout two, from the other box' > "$SRC/kprof/two.conf"
+g "$TK" commit -am other
+pl
+expv "$DST/kprof/two.conf" place
+act place
+assert "capture dir: a source change is placed" \
+  same "$SRC/kprof/two.conf" "$DST/kprof/two.conf"
+# Both changed: a conflict, nothing touched.
+echo 'app again' > "$DST/kprof/one.conf"
+echo 'source again' > "$SRC/kprof/one.conf"
+pl
+expv "$DST/kprof/one.conf" conflict
+act capture
+act place
+assert "conflict: capture and place leave live alone" \
+  test "$(cat "$DST/kprof/one.conf")" = 'app again'
+assert "conflict: and the source" \
+  test "$(cat "$SRC/kprof/one.conf")" = 'source again'
+g "$TK" checkout -- link/config/kprof/one.conf
+cp "$SRC/kprof/one.conf" "$DST/kprof/one.conf"
+chmod "$(mode "$SRC/kprof/one.conf")" "$DST/kprof/one.conf"
+act place
+# A source file git reports MODIFIED is never captured over.
+echo 'mid-edit in the repo' > "$SRC/kprof/two.conf"
+act place
+echo 'app edit' > "$DST/kprof/two.conf"
+act capture
+assert "capture skips a source file modified in git" \
+  has "$OUT" "modified in git"
+g "$TK" checkout -- link/config/kprof/two.conf
+cp "$SRC/kprof/two.conf" "$DST/kprof/two.conf"
+chmod "$(mode "$SRC/kprof/two.conf")" "$DST/kprof/two.conf"
+act place
+# The app deletes a captured file: not deletion intent (P8), it returns.
+rm -f "$DST/kprof/two.conf"
+pl
+expv "$DST/kprof/two.conf" missing
+act place
+assert "an app's deletion is restored; intent comes from the source" \
+  test -f "$DST/kprof/two.conf"
+# A per-file policy inside a capture directory wins.
+echo 'pinned' > "$SRC/kprof/pinned.conf"
+g "$TK" add -A; g "$TK" commit -m pinned
+printf 'policy %s/kprof/pinned.conf repo-owned\n' "$DST" >> "$MUSTER_CONFIG"
+act place
+echo 'app touched it' > "$DST/kprof/pinned.conf"
+pl
+expv "$DST/kprof/pinned.conf" displace
+act place
+"$MUSTER" displaced clear --all > /dev/null
+# A capture directory that is still a directory LINK (the real kanshi
+# case): migrated, reported with the policy that governs it, then capture.
+mkdir -p "$SRC/klink"
+echo 'k1' > "$SRC/klink/k1.conf"
+g "$TK" add -A; g "$TK" commit -m klink
+ln -s "$SRC/klink" "$DST/klink"
+printf 'capture %s/klink\n' "$DST" >> "$MUSTER_CONFIG"
+pl
+assert "behind its link, a capture dir's file reports app-owned" \
+  has "$OUT" "klink/k1.conf verdict=migrate-dir policy=app-owned"
+act place
+assert "migrated to a real directory" test ! -h "$DST/klink"
+echo 'k2 by the app' > "$DST/klink/k2.conf"
+pl
+expv "$DST/klink/k2.conf" capture
+assert "an app's new file after migration does NOT reach the source alone" \
+  test ! -e "$SRC/klink/k2.conf"
+
+# capture lines are validated like policy lines.
+printf 'place %s %s user-editable\ncapture /elsewhere\n' "$SRC" "$DST" \
+  > "$_T/capbad"
+OUT=$(MUSTER_CONFIG=$_T/capbad "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "a capture directory under no place root: refused"
+printf 'place %s %s user-editable\ncapture %s/x\ncapture %s/x/\n' \
+  "$SRC" "$DST" "$DST" "$DST" > "$_T/capbad"
+OUT=$(MUSTER_CONFIG=$_T/capbad "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "two capture lines for one directory: refused"
 
 # A live file muster never placed, differing from source: not ours to take.
 echo 'pre-existing' > "$SRC/app/pre.conf"

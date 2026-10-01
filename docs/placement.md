@@ -270,6 +270,21 @@ its root's default. The three policies:
     app-owned      the application rewrites the file itself: place only
                    when absent (seed), and capture back only explicitly
 
+A CAPTURE DIRECTORY (`capture <dest-dir>`, added 2026-10-01, increment 2)
+is where an application CREATES files, not just rewrites them: hwdp
+captures display layouts into kanshi's profiles directory. Its files are
+app-owned, but unlike a plain app-owned file the app's work is TRACKED:
+a file the app created (no source, no baseline) or changed since it was
+placed is verdict `capture`, folded into the source working tree by the
+explicit `muster capture` (never committing, never over a source file git
+reports modified, like merge-back), and a check FAULT until then, for
+merge-back's reason: no apply runs it, and until it runs the work is in
+no repo and no other machine gets it. A source change with the live file
+untouched is placed (the other machine captured and committed it); both
+changed is a conflict. Deletion intent still comes only from the source
+(P8): an app's deletion is restored. A per-file `policy` line inside a
+capture directory still wins.
+
 Anything in a destination with no baseline is UNMANAGED and never
 touched: muster owns only what it placed.
 
@@ -359,6 +374,9 @@ nothing below changes meaning under a config that already parses.
   Nesting is allowed: the MOST SPECIFIC root owns its subtree, and a
   source file of an outer root that lands inside an inner root is
   `shadowed` (a fault, never acted on).
+- ADDED 2026-10-01 (increment 2, additive, agreed with the user):
+  `capture <dest-dir>`, one directory, under some declared `<dest-root>`,
+  once; see P10.
 - `<dest-path>` names exactly one destination file, under some declared
   `<dest-root>`. A `policy` line for a path under no root, or a second
   `policy` line for the same path, is a config error: it could never
@@ -371,7 +389,8 @@ The state the engine keeps lives under `$MUSTER_STATE_DIR` (default
 `displaced/`. The exits the integrator maps:
 
     placed            0 all in sync   1 anything not   2 cannot run
-    place, merge-back 0 in sync after 1 something left 2 a write failed
+    place, merge-back, capture
+                      0 in sync after 1 something left 2 a write failed
     check             0 / 1 drift / 3 fault / 2 invalid config
 
 ## Possible shape, non-binding

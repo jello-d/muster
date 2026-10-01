@@ -149,14 +149,14 @@ _ck_placement() {
     _g_p=$(_st_unesc "$(_st_field "$_g_r" path)")
     case $_g_v in
       in-sync|app-held|unmanaged) ;;
-      new|missing|place|converged|migrate|displace|orphan)
+      new|missing|place|converged|migrate|migrate-dir|displace|orphan)
         _ck_add drift "place      $_g_v $_g_p" ;;
+      capture) _ck_add fault "capture    $_g_p: an application's work not" \
+        "yet in the source; review it, then muster capture" ;;
       shadowed) _ck_add fault "place      shadowed $_g_p: a more specific" \
         "root owns this path; remove it from one of the two sources" ;;
       merge-back) _ck_add fault "merge-back $_g_p: a live edit not yet" \
         "in the source; review it, then muster merge-back" ;;
-      linked-dir) _ck_add note "place      linked-dir $_g_p: under a" \
-        "whole-directory link; migrated by a later increment" ;;
       *) _ck_add fault "place      $_g_v $_g_p" ;;
     esac
   done <<RECORDS
