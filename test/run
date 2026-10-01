@@ -3,7 +3,7 @@
 # it has to say WHICH: a run that neither passes nor explains itself is the
 # worst outcome, because the summary reads like a pass.
 set -u
-_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 _rc=0 _silent=
 for _t in "$_dir"/*.t; do
   [ -f "$_t" ] || continue
