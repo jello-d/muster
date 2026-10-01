@@ -182,6 +182,14 @@ expect_rc 2 "install refuses a notifier it cannot resolve"
 assert "the refusal says why" has "$ERR" "does not resolve"
 MUSTER_CONFIG=$C/two cli schedule install
 
+# === overlapping acting profiles are never put on a timer ===================
+printf 'profile a catch-up 1h\nprofile b catch-up 2h one\n' > "$C/over"
+MUSTER_CONFIG=$C/over cli schedule install
+expect_rc 2 "install refuses overlapping acting profiles"
+assert "the refusal names them" has "$ERR" "a b one"
+assert "nothing was written for them" test ! -e "$UNITS/muster-b.timer"
+MUSTER_CONFIG=$C/two cli schedule install
+
 # === remove =================================================================
 cli schedule remove
 expect_rc 0 "remove"

@@ -101,11 +101,20 @@ _sc_orphans() {
 
 _sc_install() {
   _sc_systemd || return 2
+  # Never put a race on a timer: acting profiles that overlap are refused
+  # here, before anything is written (muster check names them too).
+  _i_ov=$(_rn_overlaps)
+  if [ -n "$_i_ov" ]; then
+    printf '%s\n%s\n' "muster: refusing to schedule overlapping acting" \
+      "profiles (profile profile repo):" >&2
+    printf '%s\n' "$_i_ov" >&2
+    return 2
+  fi
   _i_dir=$(_sc_dir)
   mkdir -p "$_i_dir" || return 2
   _i_list=$(run_profiles)
   _i_rc=0
-  while read -r _i_n _i_v _i_e; do
+  while read -r _i_n _i_v _i_e _i_sel; do
     _i_s=$(_sc_service "$_i_n") || return 2
     _sc_put "$_i_dir/muster-$_i_n.service" "$_i_s" || _i_rc=1
     _sc_put "$_i_dir/muster-$_i_n.timer" "$(_sc_timer "$_i_n" "$_i_e")" \
@@ -125,7 +134,7 @@ PROFILES
 $_i_orph
 ORPHANS
   systemctl --user daemon-reload || _i_rc=1
-  while read -r _i_n _i_v _i_e; do
+  while read -r _i_n _i_v _i_e _i_sel; do
     systemctl --user enable --now "muster-$_i_n.timer" >/dev/null 2>&1 \
       || { echo "muster: could not enable muster-$_i_n.timer" >&2; _i_rc=1; }
   done <<PROFILES
@@ -141,7 +150,7 @@ _sc_check() {
   _k_dir=$(_sc_dir)
   _k_list=$(run_profiles)
   _k_bad=0
-  while read -r _k_n _k_v _k_e; do
+  while read -r _k_n _k_v _k_e _k_sel; do
     for _k_u in service timer; do
       _k_f=$_k_dir/muster-$_k_n.$_k_u
       if [ "$_k_u" = service ]; then _k_want=$(_sc_service "$_k_n")

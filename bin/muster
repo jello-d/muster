@@ -42,6 +42,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/schedule_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/schedule_lib
 . "$MUSTER_LIB/schedule_lib"
+[ -f "$MUSTER_LIB/check_lib" ] \
+  || { echo "muster: $MUSTER_LIB/check_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/check_lib
+. "$MUSTER_LIB/check_lib"
 # The resolved path of this command, so a stored run re-enters it.
 MUSTER_BIN=$(CDPATH='' cd -- "$(dirname -- "$_self")" && pwd -P)/${_self##*/}
 
@@ -73,6 +77,9 @@ commands:
   schedule install|check|remove
          systemd user timers for the profiles: install makes them match,
          check reports drift (exit 1), remove takes muster's units away
+  check  is the declared policy coherent on this box? expands every
+         profile's selectors: overlapping acting profiles, literal names
+         that are not repos here, profiles that select nothing
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
@@ -87,6 +94,7 @@ case ${1:-} in
   run) shift; run_main "$@" ;;
   report) shift; report_main "$@" ;;
   schedule) shift; schedule_main "$@" ;;
+  check) shift; check_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;

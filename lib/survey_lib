@@ -281,9 +281,12 @@ survey_record() {
 #                            fail the run; any OTHER state is a loud
 #                            expect-mismatch (a sealed tree turning
 #                            readable means its wall has a hole)
-#   profile <name> <verb> <interval>
+#   profile <name> <verb> <interval> [<selector>...]
 #                            a scheduled run (see run_lib): verb is
-#                            survey, owed or catch-up; interval 30m, 2h, 1d
+#                            survey, owed or catch-up; interval 30m, 2h,
+#                            1d. Selectors narrow it to some repos: a
+#                            bare repo name, or /ERE/ matched against the
+#                            WHOLE name. None: the whole set
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -309,11 +312,28 @@ _sv_cfg_profile() {
   # A profile name becomes a unit name and a directory: word characters
   # only (an @ would make a systemd template, a / a path).
   case $1 in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
-  # shellcheck disable=SC2086  # two words, split on purpose
+  # shellcheck disable=SC2086  # words, split on purpose
   set -- $2
-  [ "$#" = 2 ] || return 1
+  [ "$#" -ge 2 ] || return 1
   case " $RUN_VERBS " in *" $1 "*) ;; *) return 1 ;; esac
-  _rn_seconds "$2" >/dev/null
+  _rn_seconds "$2" >/dev/null || return 1
+  shift 2
+  for _p_sel in "$@"; do _sv_cfg_selector "$_p_sel" || return 1; done
+}
+
+# _sv_cfg_selector <word>: a literal repo name, or /ERE/ that compiles. An
+# empty pattern is refused: it would select every name, which is what
+# leaving the selectors off already says, and says plainly.
+_sv_cfg_selector() {
+  case $1 in
+    //) return 1 ;;
+    /*/)
+      _q_re=${1#/}; _q_re=${_q_re%/}
+      printf 'x\n' | awk -v re="^($_q_re)\$" '{ if ($0 ~ re) n++ }' \
+        2>/dev/null ;;
+    *[!A-Za-z0-9._-]*|'') return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 _sv_cfg_check() {   # validate the whole file before anything is read from it

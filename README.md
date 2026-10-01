@@ -74,6 +74,7 @@ tackup installs through.
     muster run <profile>          run a profile and store the result
     muster report                 every profile's latest run, in one view
     muster schedule install       systemd user timers for the profiles
+    muster check                  is the profile policy coherent here?
 
 Exit status: 0 when every repo is ok, 1 when anything needs attention,
 2 when the survey could not run at all (bad option, unreadable root or
@@ -167,10 +168,23 @@ left mid-operation and needs a human now.
 
 ### Profiles, run and report
 
-A profile names a verb and how often it should run:
+A profile is a POLICY OVER A SET OF REPOS: a verb, how often, and
+which repos.
 
-    profile <name> <verb> <interval>     verb: survey, owed or catch-up
-                                         interval: 30m, 2h, 1d
+    profile <name> <verb> <interval> [<selector>...]
+        verb       survey, owed or catch-up
+        interval   30m, 2h, 1d
+        selector   a repo name, or /ERE/ matched against the WHOLE name;
+                   none means the whole set
+
+    profile watch  owed     1h                   # everything, observed
+    profile canon  catch-up 15m shared-notes     # one repo, kept current
+    profile quiet  catch-up 2h  /h.*/ charon     # a group, by rule
+
+ACTING profiles (catch-up) may not select the same repo: two could act on
+it at once. `run` and `schedule install` refuse an overlap; observe-only
+profiles overlap freely. A profile whose selectors expand to nothing
+fails its run rather than falling back to the whole set.
 
 With no profile declared there is one default, observe-only: `owed`,
 hourly. Which verb runs unattended is the integrator's choice per
@@ -198,6 +212,17 @@ could not run, `clear muster-<profile>` once none do. A flag is a
 standing fact, so raising it again is idempotent, and a lost
 notification corrects itself on the next run. A notifier that is set but
 not on PATH is reported on stderr, never skipped in silence.
+
+### check
+
+`muster check` asks whether the declared policy is coherent on THIS box,
+without running any verb: it expands every profile against the
+filesystem and lists each profile's repos, then the findings:
+`overlap` (two acting profiles share a repo), `missing` (a literal
+selector is not a repo here), `empty` (a profile selects nothing), and,
+as a note rather than a finding, `unmatched` (a pattern matches nothing
+here, which a rule may rightly do on one box). Exit 0 coherent, 1
+findings, 2 an invalid config.
 
 ### schedule
 

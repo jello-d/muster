@@ -104,7 +104,7 @@ expect_rc 2 "running an undeclared profile"
 assert "an undeclared profile is named" has "$ERR" "no profile 'owed'"
 
 for _bad in 'profile x frobnicate 1h' 'profile x owed 1w' 'profile x owed' \
-    'profile x owed 1h extra' 'profile a/b owed 1h' 'profile .x owed 1h' \
+    'profile x owed 1h bad/sel' 'profile a/b owed 1h' 'profile .x owed 1h' \
     'profile x owed h' 'profile x owed 10'; do
   printf '%s\n' "$_bad" > "$C/bad"
   MUSTER_CONFIG=$C/bad cli report
@@ -130,6 +130,59 @@ MUSTER_CONFIG=$C/two cli run look
 assert "a survey profile stores survey records" \
   has "$(cat "$S/look/latest.records")" "upstream_head="
 g "$ROOT/acted" pull --ff-only
+
+# === selection: a profile is a policy over SOME repos =======================
+mkrepo selA
+mkrepo selB
+upstream_moves selA
+upstream_moves selB
+printf 'profile only catch-up 2h selA\nprofile pat owed 1h /sel.*/\n' \
+  > "$C/sel"
+MUSTER_CONFIG=$C/sel cli run only
+assert "a selected repo is acted on" \
+  test "$(git -C "$ROOT/selA" rev-parse HEAD)" \
+  = "$(git --git-dir="$_T/origins/selA.git" rev-parse main)"
+assert "an unselected repo is NOT" \
+  test "$(git -C "$ROOT/selB" rev-parse HEAD)" \
+  != "$(git --git-dir="$_T/origins/selB.git" rev-parse main)"
+assert "the stored records cover only the selection" \
+  test "$(wc -l < "$S/only/latest.records" | tr -d ' ')" = 1
+MUSTER_CONFIG=$C/sel cli run pat
+assert "a pattern selects by name" \
+  test "$(awk '{print $1}' "$S/pat/latest.records" | tr '\n' ' ')" \
+  = "name=selA name=selB "
+g "$ROOT/selB" pull --ff-only
+
+# An empty selection NEVER falls back to the whole set.
+printf 'profile ghost catch-up 1h /nothing-here.*/\n' > "$C/ghost"
+mkrepo bystander
+upstream_moves bystander
+_by=$(git -C "$ROOT/bystander" rev-parse HEAD)
+MUSTER_CONFIG=$C/ghost cli run ghost
+expect_rc 2 "a profile that selects nothing"
+assert "an empty selection touched nothing" \
+  test "$(git -C "$ROOT/bystander" rev-parse HEAD)" = "$_by"
+assert "the failed run is stored, with its reason" \
+  has "$(cat "$S/ghost/latest.err")" "selects no repos"
+assert "and reported as failed" test "$(meta ghost exit)" = 2
+g "$ROOT/bystander" pull --ff-only
+
+# Overlapping ACTING profiles: run refuses, and the refusal is stored.
+printf 'profile p1 catch-up 1h selA\nprofile p2 catch-up 2h /selA|selB/\n' \
+  > "$C/over"
+upstream_moves selA
+_sa=$(git -C "$ROOT/selA" rev-parse HEAD)
+MUSTER_CONFIG=$C/over cli run p1
+expect_rc 2 "an acting profile that overlaps another"
+assert "the overlap refusal touched nothing" \
+  test "$(git -C "$ROOT/selA" rev-parse HEAD)" = "$_sa"
+assert "the refusal names the overlap" \
+  has "$(cat "$S/p1/latest.err")" "p1 p2 selA"
+printf 'profile p1 catch-up 1h selA\nprofile p2 owed 2h /selA|selB/\n' \
+  > "$C/over"
+MUSTER_CONFIG=$C/over cli run p1
+expect_rc 0 "overlapping an OBSERVE-only profile is fine"
+g "$ROOT/selA" pull --ff-only 2>/dev/null
 
 # === pruning ================================================================
 printf 'profile p owed 1h\n' > "$C/p"

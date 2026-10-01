@@ -1,0 +1,75 @@
+# shellcheck shell=sh
+# check_lib - `muster check`: is the declared policy coherent on THIS box?
+#
+# Sourced by bin/muster, never executed. It expands every profile's
+# selectors against the filesystem and reports, without running any verb:
+#
+#   overlap   two ACTING profiles select one repo (run and schedule
+#             install refuse this too; check is where it is seen first)
+#   missing   a literal selector names no repo here: the profile has
+#             quietly stopped covering something it names explicitly
+#   empty     a profile with selectors selects nothing: its runs fail
+#   unmatched a /pattern/ matches no repo here. A NOTE, not a finding: a
+#             pattern is a rule, and a rule may rightly match nothing on
+#             one box (curfloo exists on box B only)
+#
+# Exit 0 coherent, 1 findings, 2 the config itself is invalid.
+
+# _ck_literal_missing <name>: the literal is not a repo on this box.
+_ck_literal_missing() {
+  _l_path=$(_sv_cfg repo "$1") || _l_path=$SV_ROOT/$1
+  case $(_sv_where "$_l_path") in
+    repo) _sv_probe_git "$_l_path" 2>/dev/null && return 1 ;;
+    unreadable) return 1 ;;   # it is there; whether it is a repo is unknown
+  esac
+  return 0
+}
+
+# _ck_profile <name> <verb> <interval> [<selector>...]: one table row, and
+# its findings appended to CK_FIND.
+_ck_profile() {
+  _p_n=$1 _p_v=$2 _p_e=$3
+  shift 3
+  if [ "$#" = 0 ]; then
+    _p_count=$(SV_RECORD_FN=_rn_name_only survey_records | grep -c . || :)
+    printf '%-12s  %-8s  %-5s  all (%s)\n' "$_p_n" "$_p_v" "$_p_e" \
+      "$_p_count"
+    return 0
+  fi
+  for _p_s in "$@"; do
+    case $_p_s in
+      /*/) [ -n "$(_rn_expand "$_p_s")" ] \
+             || CK_NOTE="${CK_NOTE}unmatched  $_p_n: $_p_s matches no repo here
+" ;;
+      *) _ck_literal_missing "$_p_s" \
+           && CK_FIND="${CK_FIND}missing    $_p_n: $_p_s is not a repo here
+" ;;
+    esac
+  done
+  _p_names=$(_rn_expand "$@" | tr '\n' ' ' | sed 's/ $//')
+  [ -n "$_p_names" ] \
+    || CK_FIND="${CK_FIND}empty      $_p_n: selects no repos on this box
+"
+  printf '%-12s  %-8s  %-5s  %s\n' "$_p_n" "$_p_v" "$_p_e" \
+    "${_p_names:-(none)}"
+}
+
+check_main() {
+  [ "$#" = 0 ] || { echo "usage: muster check" >&2; return 2; }
+  survey_config || return 2
+  CK_FIND='' CK_NOTE=''
+  printf '%-12s  %-8s  %-5s  %s\n' PROFILE VERB EVERY REPOS
+  _c_list=$(run_profiles)
+  while read -r _c_n _c_v _c_e _c_sel; do
+    # shellcheck disable=SC2086  # selectors are words
+    _ck_profile "$_c_n" "$_c_v" "$_c_e" $_c_sel
+  done <<PROFILES
+$_c_list
+PROFILES
+  _c_ov=$(_rn_overlaps)
+  [ -z "$_c_ov" ] || CK_FIND="$CK_FIND$(printf '%s\n' "$_c_ov" \
+    | awk '{ printf "overlap    %s and %s both act on %s\n", $1, $2, $3 }')
+"
+  [ -z "$CK_FIND$CK_NOTE" ] || printf '\n%s%s' "$CK_FIND" "$CK_NOTE"
+  [ -z "$CK_FIND" ]
+}

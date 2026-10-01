@@ -7,10 +7,18 @@
 # charon split again. Scheduled and manual runs take this ONE path, so the
 # consolidated report reads one store and cannot disagree with either.
 #
-# A PROFILE is `profile <name> <verb> <interval>` in the config. With none
-# declared there is one default, observe-only: `owed`, hourly. Which verb a
-# profile runs is the integrator's choice, so a profile may run catch-up
-# unattended, but nothing does unless it is declared to.
+# A PROFILE is a POLICY OVER A SET OF REPOS: `profile <name> <verb>
+# <interval> [<selector>...]`. Selectors narrow it from the whole set to
+# some repos: a bare name, or /ERE/ matched against the whole name. With
+# none declared there is one default, observe-only: `owed`, hourly, over
+# everything. Which verb a profile runs is the integrator's choice, so a
+# profile may run catch-up unattended, but nothing does unless declared.
+#
+# ACTING PROFILES MAY NOT OVERLAP. Two catch-up profiles selecting one repo
+# could act on it at once; git's lock and the changed-underfoot check
+# would catch that, but it is a race the config made possible, so `muster
+# check` reports it and `run` and `schedule install` refuse it outright.
+# Observe-only profiles overlap freely.
 #
 # THE STORE, per profile, under $MUSTER_STATE_DIR (default
 # ~/.local/state/muster):
@@ -30,6 +38,7 @@
 
 # shellcheck disable=SC2034  # read by survey_lib's config check
 RUN_VERBS='survey owed catch-up'
+RUN_ACTING='catch-up'
 
 _rn_state_dir() {
   _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster
@@ -63,9 +72,45 @@ run_profiles() {
   fi
 }
 
-_rn_profile() {   # <name> -> "<verb> <interval>"; fails if not declared
-  run_profiles | awk -v n="$1" '$1 == n { print $2, $3; f = 1; exit }
-    END { exit !f }'
+# _rn_profile <name> -> "<verb> <interval> [<selector>...]"; fails if not
+# declared.
+_rn_profile() {
+  run_profiles | awk -v n="$1" '$1 == n { sub(/^[^ ]+ /, ""); print
+    f = 1; exit } END { exit !f }'
+}
+
+_rn_name_only() { printf '%s\n' "$1"; }
+
+# _rn_expand [<selector>...]: the repo names a profile selects, one per
+# line, in set order, each once. A literal is taken as given (like a name
+# on the command line, so it may be absent: `muster check` says so); a
+# /pattern/ is matched in full against the names in the set.
+_rn_expand() {
+  _x_set=$(SV_RECORD_FN=_rn_name_only survey_records)
+  for _x_s in "$@"; do
+    case $_x_s in
+      /*/) _x_re=${_x_s#/}; _x_re=${_x_re%/}
+           printf '%s\n' "$_x_set" | awk -v re="^($_x_re)\$" \
+             'NF && $0 ~ re' ;;
+      *) printf '%s\n' "$_x_s" ;;
+    esac
+  done | awk '!seen[$0]++'
+}
+
+_rn_acting() { case " $RUN_ACTING " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# _rn_overlaps: "<profile> <profile> <repo>" for every repo selected by two
+# acting profiles. Expands every acting profile against THIS box's set.
+_rn_overlaps() {
+  run_profiles | while read -r _o_n _o_v _o_e _o_sel; do
+    _rn_acting "$_o_v" || continue
+    # shellcheck disable=SC2086  # selectors are words
+    if [ -n "$_o_sel" ]; then _o_names=$(_rn_expand $_o_sel)
+    else _o_names=$(SV_RECORD_FN=_rn_name_only survey_records)
+    fi
+    printf '%s\n' "$_o_names" | awk -v p="$_o_n" 'NF { print p, $0 }'
+  done | awk '{ if ($2 in owner) print owner[$2], $1, $2
+                else owner[$2] = $1 }'
 }
 
 # _rn_lock <dir>: one run per profile at a time. The pid is recorded so a
@@ -165,6 +210,35 @@ _rn_notify() {
     || echo "muster: notifier $MUSTER_NOTIFY $_n_verb failed" >&2
 }
 
+# _rn_invoke <profile>: the verb, over the profile's selection. A run that
+# must not happen (an empty selection, an overlap) fails with exit 2 and a
+# reason, and is STORED like any other, so report shows it as failed.
+_rn_invoke() {
+  if _rn_acting "$RN_VERB" \
+    && _i_ov=$(_rn_overlaps | awk -v p="$1" '$1 == p || $2 == p') \
+    && [ -n "$_i_ov" ]; then
+    printf 'muster: refusing to run %s: another acting profile selects' "$1"
+    printf ' the same repo(s):\n%s\n' "$_i_ov"
+    return 2
+  fi >&2
+  [ -n "$RN_SEL" ] || { "$MUSTER_BIN" "$RN_VERB" --porcelain; return; }
+  # shellcheck disable=SC2086  # selectors are words
+  _i_names=$(_rn_expand $RN_SEL)
+  if [ -z "$_i_names" ]; then
+    # NEVER fall back to the whole set: an empty selection that ran over
+    # everything would be the quietest way to act where nobody asked.
+    echo "muster: profile $1 selects no repos on this box ($RN_SEL)" >&2
+    return 2
+  fi
+  _i_old=$IFS
+  IFS='
+'
+  # shellcheck disable=SC2086  # one name per line, split on newline
+  set -- $_i_names
+  IFS=$_i_old
+  "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
+}
+
 # run_main <profile>: run it, store it, notify on change; exit as the verb.
 run_main() {
   [ "$#" = 1 ] && [ -n "$1" ] \
@@ -172,7 +246,13 @@ run_main() {
   survey_config || return 2
   _m_p=$(_rn_profile "$1") \
     || { echo "muster: no profile '$1' (see muster report)" >&2; return 2; }
-  RN_VERB=${_m_p% *} RN_EVERY=${_m_p#* }
+  # shellcheck disable=SC2086  # verb, interval, selectors: words
+  set -- "$1" $_m_p
+  RN_VERB=$2 RN_EVERY=$3
+  _m_name=$1
+  shift 3
+  RN_SEL=$*
+  set -- "$_m_name"
   case $1 in
     */*|.*) echo "muster: unusable profile name '$1'" >&2; return 2 ;;
   esac
@@ -191,8 +271,7 @@ run_main() {
     '$_m_dir/lock/pid'; rmdir '$_m_dir/lock' 2>/dev/null" EXIT
   _m_start=$(date +%s)
   _m_rc=0
-  "$MUSTER_BIN" "$RN_VERB" --porcelain >"$_m_tmp.records" \
-    2>"$_m_tmp.err" </dev/null || _m_rc=$?
+  _rn_invoke "$1" >"$_m_tmp.records" 2>"$_m_tmp.err" </dev/null || _m_rc=$?
   printf 'profile=%s\nverb=%s\ninterval=%s\nstarted=%s\nfinished=%s\n' \
     "$1" "$RN_VERB" "$RN_EVERY" "$_m_start" "$(date +%s)" >"$_m_tmp.meta"
   printf 'exit=%s\nhost=%s\n' "$_m_rc" "$(hostname 2>/dev/null || echo -)" \
@@ -255,7 +334,7 @@ report_main() {
   esac
   [ "$#" = 0 ] || { echo "usage: muster report [--porcelain]" >&2; return 2; }
   survey_config || return 2
-  _r_out=$(run_profiles | while read -r _r_n _r_v _r_e; do
+  _r_out=$(run_profiles | while read -r _r_n _r_v _r_e _r_sel; do
     _rn_status "$_r_n" "$_r_v" "$_r_e"
   done)
   if [ "$_r_mode" = porcelain ]; then
