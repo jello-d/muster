@@ -262,6 +262,30 @@ survey --fetch unreachable
 expect unreachable state fetch-failed
 expect_rc 1 "a failed fetch"
 
+# THE 2026-09-30 SHAPE: one run, upstream moved for both repos, one fetch
+# fails. The failed repo must contribute NO number (its ref is stale and
+# would say behind 0), and its reason must reach stderr.
+mkrepo mixok
+mkrepo mixbad
+upstream_moves mixok
+upstream_moves mixbad
+g "$ROOT/mixbad" remote set-url origin "$_T/origins/gone-away.git"
+survey --fetch mixok mixbad
+expect mixok behind 1
+expect mixok state behind
+expect mixbad state fetch-failed
+expect mixbad ahead -
+expect mixbad behind -
+expect_rc 1 "a run where one fetch failed"
+assert "fetch failure: stderr names the repo" has "$ERR" "$ROOT/mixbad"
+assert "fetch failure: stderr carries git's reason" has "$ERR" gone-away
+assert "fetch failure: the good repo is not named on stderr" \
+  test -z "$(printf '%s\n' "$ERR" | grep "$ROOT/mixok")"
+# Without --fetch the same repo reports its (stale) counts, qualified by
+# its fetch time, exactly as before: only a FAILED fetch voids them.
+survey mixbad
+expect mixbad behind 0
+
 # A repo with nothing to fetch from is not a fetch failure.
 mkrepo localonly
 g "$ROOT/localonly" checkout -b solo

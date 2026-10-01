@@ -67,6 +67,7 @@ _sv_flag() { SV_FLAGS="${SV_FLAGS:+$SV_FLAGS,}$1"; }
 _sv_reset() {
   SV_FLAGS='' SV_BRANCH=- SV_HEAD=- SV_UP=- SV_UPHEAD=- SV_AHEAD=- SV_BEHIND=-
   SV_FETCHED=- SV_MOD=- SV_UNTR=- SV_DEP=- SV_UPREF=
+  SV_FETCH_FAILED=
 }
 
 # _sv_where <path> -> repo | absent | unreadable | not-a-repo
@@ -124,6 +125,7 @@ _sv_heads() {
 # which is only as current as the last fetch; SV_FETCHED says how current.
 _sv_counts() {
   [ "$SV_UP" != - ] && [ "$SV_HEAD" != - ] || return 0
+  [ -z "$SV_FETCH_FAILED" ] || return 0   # a stale ref answers nothing
   _n_out=$(_sv_git "$1" rev-list --left-right --count "HEAD...$SV_UPREF") \
     || { _sv_flag count-failed; return 0; }
   # shellcheck disable=SC2086  # two numbers, split on purpose
@@ -192,6 +194,14 @@ _sv_deployed() {
 
 # _sv_fetch <path>: --fetch only. Non-interactive by construction, so a
 # missing credential fails instead of hanging on a prompt nobody can see.
+#
+# THE OUTCOME IS PER REPO AND READ FROM THE EXIT STATUS. A fleet mixes ssh
+# and https remotes, so a session with no ssh agent fetches some repos and
+# fails the rest in the same run, and a failed fetch leaves the ref exactly
+# as it was: its behind count then looks identical to a fresh one. That is
+# how a hand-run diagnosis came out confidently wrong on 2026-09-30. So a
+# failed fetch voids the counts (see _sv_counts) and its reason goes to
+# stderr rather than to /dev/null.
 _sv_fetch() {
   _x_branch=$(_sv_git "$1" symbolic-ref -q --short HEAD) || return 0
   _x_remote=$(_sv_git "$1" config --get "branch.$_x_branch.remote") \
@@ -201,10 +211,16 @@ _sv_fetch() {
   command -v timeout >/dev/null 2>&1 \
     && _x_to="timeout ${MUSTER_FETCH_TIMEOUT:-60}"
   # shellcheck disable=SC2086  # $_x_to is empty or two words
-  GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
-    $_x_to git -C "$1" fetch --quiet "$_x_remote" </dev/null >/dev/null 2>&1 \
-    || _sv_flag fetch-failed
+  if _x_err=$(GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
+      $_x_to git -C "$1" fetch --quiet "$_x_remote" 2>&1 </dev/null); then
+    return 0
+  fi
+  SV_FETCH_FAILED=1
+  _sv_flag fetch-failed
+  _x_err=$(printf '%s\n' "$_x_err" | grep -v '^[[:space:]]*$' | head -n 1)
+  printf 'muster: %s: fetch from %s failed: %s\n' \
+    "$1" "$_x_remote" "${_x_err:-no message (timed out?)}" >&2
 }
 
 _sv_short() {   # <sha or word> -> 12-char sha, or the word unchanged

@@ -75,6 +75,13 @@ as current as the last fetch, and every record carries `fetched`, the
 epoch time this clone last heard from its remote (`never` if there is no
 evidence it ever did). The table shows it as an age beside the count.
 
+With `--fetch`, the outcome is read per repo from git's exit status. A
+repo whose fetch failed is `fetch-failed`, its `ahead` and `behind` are
+`-` rather than numbers from the stale ref, and git's reason is printed
+on stderr. A fleet mixing ssh and https remotes, surveyed from a session
+with no ssh agent, fails exactly the ssh half, so this is the normal
+failure, not an edge case.
+
 ### The porcelain
 
 One line per repo, space-separated `key=value`, every key on every line,
