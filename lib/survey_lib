@@ -300,6 +300,11 @@ survey_record() {
 #                            Selectors narrow it to some repos: a bare
 #                            name, or /ERE/ matched against the WHOLE
 #                            name. None: the whole set
+#   place <source-root> <dest-root> <policy>
+#   policy <dest-path> <policy>
+#                            config placed as COPIES (place_lib, and
+#                            docs/placement.md); policy is user-editable,
+#                            repo-owned or app-owned
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -376,6 +381,16 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
       profile) _sv_cfg_profile "$_k_a" "$_k_b" && continue ;;
+      place)
+        # shellcheck disable=SC2086  # two words, split on purpose
+        set -- $_k_b
+        [ -n "$_k_a" ] && [ "$#" = 2 ] \
+          && case " $PL_POLICIES " in *" $2 "*) true ;; *) false ;; esac \
+          && continue ;;
+      policy)
+        [ -n "$_k_a" ] \
+          && case " $PL_POLICIES " in *" $_k_b "*) true ;; *) false ;; esac \
+          && continue ;;
       notify)
         _k_ntf=$((${_k_ntf:-0} + 1))
         [ -n "$_k_a" ] && [ -z "$_k_b" ] && [ "$_k_ntf" = 1 ] && continue ;;

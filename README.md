@@ -302,6 +302,44 @@ that is the stamp working, not a false alarm. The stamp carries its own
 paths, so it is checked against the tree it named whatever the config
 says later. Both are read-only.
 
+### placement (config as copies)
+
+Requirements and reasoning: `docs/placement.md`. The integrator declares
+root pairs and per-file overrides:
+
+    place <source-root> <dest-root> <user-editable|repo-owned|app-owned>
+    policy <dest-path> <user-editable|repo-owned|app-owned>
+
+Each file has three versions: the source (the integrator's working tree;
+tracked and new files, never gitignored ones), the live copy, and the
+baseline, a sparse mirror under `<state>/root/<absolute path>` whose
+files ARE what was last placed, content and mode. Nothing else is
+stored. The commands:
+
+    muster placed [--porcelain] [path...]    each file's verdict
+    muster place [--dry-run] [path...]       place what is owed
+    muster merge-back [--dry-run] [path...]  live edits into the source
+    muster where <path>                      source <-> destination
+    muster displaced [list | clear ...]      repo-owned edits kept aside
+
+Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),
+`place`, `converged`, `migrate` (a symlink into its own source becomes a
+copy), `merge-back`, `displace`, `orphan`, `app-held`, `conflict`,
+`foreign`, `linked-dir`, `read-only`, `unreadable`, `no-source`.
+
+No edit is lost under any policy. `place` never overwrites a
+user-editable live edit (that is a merge-back or a conflict); it
+overwrites a repo-owned one only after DISPLACING it to
+`<state>/displaced/<run>/<path>`, verified, kept until a person clears
+it, and a `check` fault until then. `merge-back` writes into the source
+working tree only, never commits, and leaves alone a source file git
+reports as modified. Every write goes to a temp file that is verified
+BEFORE it is renamed into place, and the baseline moves only after the
+live write is verified. A source root that is missing, unreadable or
+empty places and removes NOTHING. `check` reports placement drift (what
+place or merge-back repairs) and faults (conflicts, displaced edits,
+read-only destinations, a missing source).
+
 ### schedule
 
 `muster schedule install|check|remove` turns the profiles into systemd
@@ -374,9 +412,10 @@ skipped line.
 
 ## Status
 
-NEXT: placing config as copies with drift detection and merge-back,
-replacing symlinks into source; requirements in `docs/placement.md`, not
-yet built.
+PLACEMENT, first increment (leaf files) BUILT: config placed as copies
+with drift detection and merge-back, replacing symlinks into source;
+requirements in `docs/placement.md`. Not yet: whole-directory links
+(reported as `linked-dir`), overlay layers, the three-way merge (P6).
 
 `survey`, `owed`, `catch-up`, `run`, `report`, `schedule`, `check` and
 `stamp` are implemented: requirements R1 to R11, except that re-seeding

@@ -117,6 +117,7 @@ PROFILES
   done <<OVERLAPS
 $_c_ov
 OVERLAPS
+  [ -z "$(_pl_roots)" ] || _ck_placement
   _c_np=$(run_notify_problem)
   [ -z "$_c_np" ] || _ck_add fault "notify     $_c_np"
   _ck_schedule
@@ -129,6 +130,37 @@ OVERLAPS
   if [ -n "$CK_FAULT" ]; then return 3; fi
   if [ -n "$CK_DRIFT" ]; then return 1; fi
   return 0
+}
+
+# _ck_placement: config placed as copies (place_lib). What `muster place`
+# or `muster merge-back` repairs is drift; what needs a person is a fault,
+# including every kept (displaced) edit until it is reviewed and cleared.
+_ck_placement() {
+  _g_recs=$(placement_records)
+  while IFS= read -r _g_r; do
+    [ -n "$_g_r" ] || continue
+    _g_v=$(_st_field "$_g_r" verdict)
+    _g_p=$(_st_unesc "$(_st_field "$_g_r" path)")
+    case $_g_v in
+      in-sync|app-held|unmanaged) ;;
+      new|missing|place|converged|migrate|displace|orphan)
+        _ck_add drift "place      $_g_v $_g_p" ;;
+      merge-back) _ck_add drift "merge-back $_g_p" ;;
+      linked-dir) _ck_add note "place      linked-dir $_g_p: under a" \
+        "whole-directory link; migrated by a later increment" ;;
+      *) _ck_add fault "place      $_g_v $_g_p" ;;
+    esac
+  done <<RECORDS
+$_g_recs
+RECORDS
+  _g_disp=$(placement_displaced)
+  while read -r _g_run _g_path; do
+    [ -n "$_g_path" ] || continue
+    _ck_add fault "displaced  $_g_path (run $_g_run): a repo-owned live" \
+      "edit kept aside; review it, then muster displaced clear"
+  done <<DISPLACED
+$_g_disp
+DISPLACED
 }
 
 # _ck_schedule: the units against the intent. Every line is drift, except

@@ -50,6 +50,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/stamp_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/stamp_lib
 . "$MUSTER_LIB/stamp_lib"
+[ -f "$MUSTER_LIB/place_lib" ] \
+  || { echo "muster: $MUSTER_LIB/place_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/place_lib
+. "$MUSTER_LIB/place_lib"
 # The resolved path of this command, so a stored run re-enters it.
 MUSTER_BIN=$(CDPATH='' cd -- "$(dirname -- "$_self")" && pwd -P)/${_self##*/}
 
@@ -90,6 +94,20 @@ commands:
   stamp check [--fetch] [--porcelain] <file|->
          does a stamp still describe the tree? holds, moved, changed,
          superseded (origin moved past it) or gone, per repo
+  placed [--porcelain] [path...]
+         config placed as copies: each managed file's verdict (in-sync,
+         new, place, merge-back, displace, conflict, ...); read-only
+  place  [--dry-run] [path...]
+         place what is owed: new and changed source, migrations from
+         symlinks, orphans; a repo-owned live edit is DISPLACED (kept,
+         verified) first. Never touches a conflict or a merge-back
+  merge-back [--dry-run] [path...]
+         fold user-editable live edits into the source working tree;
+         never commits, never writes a source file git reports modified
+  where  <path>
+         which source a destination comes from, or the reverse
+  displaced [list | clear <run> <path>... | clear --all]
+         the live edits kept aside by place; a check fault until cleared
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
@@ -106,6 +124,11 @@ case ${1:-} in
   schedule) shift; schedule_main "$@" ;;
   check) shift; check_main "$@" ;;
   stamp) shift; stamp_main "$@" ;;
+  placed) shift; placed_main "$@" ;;
+  place) shift; place_main "$@" ;;
+  merge-back) shift; merge_back_main "$@" ;;
+  where) shift; where_main "$@" ;;
+  displaced) shift; displaced_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;

@@ -1,0 +1,518 @@
+# shellcheck shell=sh
+# shellcheck disable=SC2030,SC2031
+# (The PL_ globals are set and read per file INSIDE the walk's pipeline
+# subshell, by design: each callback sees the verdict of the file it acts
+# on, and nothing outside the walk reads them.)
+# place_lib - config as COPIES, with drift detection and merge-back
+# (docs/placement.md, P1 to P13). First increment: leaf files under the
+# declared roots. Not yet: whole-directory links, overlay layers, the
+# three-way merge of P6.
+#
+# Sourced by bin/muster, never executed.
+#
+# THREE VERSIONS PER FILE (P2): the SOURCE (what the integrator declares,
+# in its working tree), the LIVE copy, and the BASELINE, which is the
+# user's sparse mirror: <state>/root/<absolute destination path>. A file's
+# presence there means tracked, its content is what was last placed, and
+# its mode is the mode that was placed. Nothing else is stored.
+#
+# THE CONFIG (the integrator's facts):
+#
+#   place <source-root> <dest-root> <user-editable|repo-owned|app-owned>
+#   policy <dest-path> <user-editable|repo-owned|app-owned>
+#
+# THE VERDICTS (P3), per destination file:
+#
+#   in-sync     source = baseline = live
+#   new         in source, never placed, nothing live: place it
+#   missing     placed before, live gone, still in source: place it again
+#               (a live deletion is not intent: P8)
+#   place       source changed, live untouched: overwrite live, safe
+#   converged   live already equals source: record the baseline only
+#   migrate     live is a symlink into its own source: replace with a copy
+#   merge-back  user-editable, live edited, source untouched
+#   displace    repo-owned, live edited: move the edit aside, then place
+#   orphan      gone from source, live untouched: remove it (P8)
+#   app-held    app-owned and live exists: the application's, untouched
+#   conflict    both edited differently (user-editable), or live exists
+#               unplaced and differs from source: a human decides
+#   foreign     live is a symlink pointing anywhere but its source
+#   linked-dir  a directory between the destination root and the file is
+#               itself a symlink (the whole-directory link model): the live
+#               file IS some other file, so nothing here is acted on. The
+#               next increment migrates these; this one only names them
+#   unreadable  could not look (R4)
+#   no-source   the source root is missing, empty or unreadable: a FAULT,
+#               and nothing under it is placed or removed (P8's guard)
+
+# shellcheck disable=SC2034  # read by survey_lib's config check
+PL_POLICIES='user-editable repo-owned app-owned'
+
+_pl_state() { _rn_state_dir; }
+
+# A temporary file muster writes beside its target before renaming it into
+# place. Never content: a run killed mid-write leaves one, and the mirror
+# walk must not mistake it for a baseline (charon's lesson, from unison).
+PL_TMP=.muster-tmp
+
+_pl_mode() {   # <file> -> permission bits, GNU or BSD stat
+  stat -c %a -- "$1" 2>/dev/null || stat -f %Lp -- "$1" 2>/dev/null
+}
+
+# _pl_same <a> <b>: same content AND same mode (P7: mode is part of it).
+_pl_same() {
+  cmp -s -- "$1" "$2" && [ "$(_pl_mode "$1")" = "$(_pl_mode "$2")" ]
+}
+
+# _pl_roots: "<source-root> <dest-root> <policy>" per `place` line,
+# both roots tilde-expanded. Paths with spaces are not supported here.
+_pl_roots() {
+  [ -e "$SV_CONFIG" ] || return 0
+  while read -r _r_kw _r_a _r_b _r_c || [ -n "$_r_kw" ]; do
+    if [ "$_r_kw" = place ]; then
+      printf '%s %s %s\n' "$(_sv_tilde "$_r_a")" "$(_sv_tilde "$_r_b")" \
+        "$_r_c"
+    fi
+  done < "$SV_CONFIG"
+}
+
+# _pl_policy <dest-path> <root-default>: the per-file override if one is
+# declared (P10), else the root's default.
+_pl_policy() {
+  if [ -e "$SV_CONFIG" ]; then
+    _y_p=$(while read -r _y_kw _y_a _y_b || [ -n "$_y_kw" ]; do
+      if [ "$_y_kw" = policy ] && [ "$(_sv_tilde "$_y_a")" = "$1" ]; then
+        printf '%s\n' "$_y_b"
+      fi
+    done < "$SV_CONFIG" | tail -n 1)
+    [ -z "$_y_p" ] || { printf '%s' "$_y_p"; return 0; }
+  fi
+  printf '%s' "$2"
+}
+
+# _pl_sources <source-root>: the relative path of every SOURCE file under
+# it. In a git work tree: tracked files plus new, unignored ones, in their
+# working-tree state; IGNORED FILES ARE NEVER SOURCE, because the old
+# symlinks let applications write runtime files into the source tree.
+_pl_sources() {
+  if git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Relative to the source root itself (no --full-name), so a symlink
+    # in the root's own path cannot skew the paths.
+    git -C "$1" -c core.quotePath=false ls-files --cached --others \
+      --exclude-standard -- . 2>/dev/null \
+      | while IFS= read -r _s_f; do
+          if [ -f "$1/$_s_f" ] && [ ! -h "$1/$_s_f" ]; then
+            printf '%s\n' "$_s_f"
+          fi
+        done
+  else
+    (cd "$1" && find . -type f | sed 's|^\./||')
+  fi
+}
+
+# _pl_baselines <dest-root>: every tracked destination under it, as a
+# path relative to the root, read from the mirror.
+_pl_baselines() {
+  _b_m=$(_pl_state)/root$1
+  [ -d "$_b_m" ] || return 0
+  (cd "$_b_m" && find . -type f ! -name "*$PL_TMP.*" | sed 's|^\./||')
+}
+
+# _pl_verdict <source-root> <dest-root> <root-policy> <rel>: sets PL_V
+# (the verdict), PL_POL (effective policy), PL_S, PL_D, PL_M (source,
+# destination and mirror paths). The whole of P3, P8 and P10, in one place.
+_pl_verdict() {
+  PL_S=$1/$4 PL_D=$2/$4 PL_DR=$2
+  PL_M=$(_pl_state)/root$PL_D
+  PL_POL=$(_pl_policy "$PL_D" "$3")
+  _v_s='' _v_b='' _v_l=''
+  [ -f "$PL_S" ] && _v_s=1
+  [ -f "$PL_M" ] && _v_b=1
+  if _pl_under_link "$PL_D" "$2"; then PL_V=linked-dir; return 0; fi
+  if [ -h "$PL_D" ]; then
+    _pl_symlink "$1"; return 0
+  fi
+  if [ -e "$PL_D" ]; then
+    [ -f "$PL_D" ] && [ -r "$PL_D" ] || { PL_V=unreadable; return 0; }
+    _v_l=1
+  fi
+  if [ -z "$_v_s" ]; then _pl_gone "$_v_b" "$_v_l"; return 0; fi
+  if [ "$PL_POL" = app-owned ]; then
+    if [ -n "$_v_l" ]; then PL_V=app-held; else PL_V=new; fi
+    return 0
+  fi
+  if [ -z "$_v_b" ]; then _pl_unplaced "$_v_l"; return 0; fi
+  [ -n "$_v_l" ] || { PL_V=missing; return 0; }
+  _pl_three
+}
+
+# _pl_three: source, baseline and live all exist; who changed what.
+_pl_three() {
+  _t_src=1 _t_live=1
+  _pl_same "$PL_S" "$PL_M" && _t_src=''
+  _pl_same "$PL_D" "$PL_M" && _t_live=''
+  if [ -z "$_t_src$_t_live" ]; then PL_V=in-sync
+  elif [ -z "$_t_live" ]; then PL_V=place
+  elif _pl_same "$PL_D" "$PL_S"; then PL_V=converged
+  elif [ "$PL_POL" = repo-owned ]; then PL_V=displace
+  elif [ -z "$_t_src" ]; then PL_V=merge-back
+  else PL_V=conflict
+  fi
+}
+
+# _pl_unplaced <live?>: in source, no baseline yet.
+_pl_unplaced() {
+  if [ -z "$1" ]; then PL_V=new
+  elif _pl_same "$PL_D" "$PL_S"; then PL_V=converged
+  elif [ "$PL_POL" = repo-owned ]; then PL_V=displace
+  else PL_V=conflict   # a live file we never placed, and it differs
+  fi
+}
+
+# _pl_gone <baseline?> <live?>: no longer in source (P8).
+_pl_gone() {
+  if [ -z "$1" ]; then PL_V=unmanaged; return 0; fi
+  if [ -z "$2" ] || _pl_same "$PL_D" "$PL_M"; then PL_V=orphan
+  elif [ "$PL_POL" = repo-owned ]; then PL_V=displace
+  elif [ "$PL_POL" = app-owned ]; then PL_V=orphan
+  else PL_V=conflict
+  fi
+}
+
+# _pl_under_link <dest> <dest-root>: is any directory BETWEEN the root and
+# the file a symlink? Then the "live" file is another file seen through it
+# (found live: a whole-directory link made its file read as converged,
+# which would have recorded a baseline for a file still linked to source).
+_pl_under_link() {
+  _u_d=$(dirname -- "$1")
+  while [ "$_u_d" != "$2" ] && [ "$_u_d" != / ] && [ "$_u_d" != . ]; do
+    [ ! -h "$_u_d" ] || return 0
+    _u_d=$(dirname -- "$_u_d")
+  done
+  return 1
+}
+
+# _pl_symlink <source-root>: the live path is a symlink. Into its OWN
+# source file is the migration case (P12); anything else is foreign.
+_pl_symlink() {
+  _k_to=$(readlink -f -- "$PL_D" 2>/dev/null) || _k_to=
+  _k_src=$(readlink -f -- "$PL_S" 2>/dev/null) || _k_src=
+  if [ -n "$_k_to" ] && [ "$_k_to" = "$_k_src" ]; then PL_V=migrate
+  else PL_V=foreign
+  fi
+}
+
+# _pl_writable <path>: could the user create or replace this path? The
+# nearest existing ancestor directory decides. Root-owned destinations are
+# compared and reported, never written (P11).
+_pl_writable() {
+  _w_d=$(dirname -- "$1")
+  while [ ! -d "$_w_d" ]; do _w_d=$(dirname -- "$_w_d"); done
+  [ -w "$_w_d" ] && { [ ! -e "$1" ] || [ -w "$1" ]; }
+}
+
+_pl_drift_verdict() {
+  case $1 in
+    new|missing|place|converged|migrate|merge-back|displace|orphan)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# _pl_root_ok <source-root>: the mass-deletion guard (P8). A source root
+# that is missing, unreadable or EMPTY would read as "everything was
+# removed", so it places and removes nothing.
+_pl_root_ok() {
+  [ -d "$1" ] && [ -r "$1" ] && [ -x "$1" ] || return 1
+  [ -n "$(_pl_sources "$1" | head -n 1)" ]
+}
+
+_pl_record() {   # one porcelain line from the PL_ globals
+  printf 'path=%s verdict=%s policy=%s source=%s\n' "$(_sv_esc "$PL_D")" \
+    "$PL_V" "$PL_POL" "$(_sv_esc "$PL_S")"
+}
+
+# placement_records: every destination under every declared root, one
+# record each. A drift verdict on a path the user cannot write becomes
+# `read-only`: reported, never written (P11).
+placement_records() {
+  _pl_roots | while read -r _e_src _e_dst _e_pol; do
+    if ! _pl_root_ok "$_e_src"; then
+      PL_D=$_e_dst PL_S=$_e_src PL_POL=$_e_pol PL_V=no-source
+      _pl_record
+      continue
+    fi
+    { _pl_sources "$_e_src"; _pl_baselines "$_e_dst"; } | sort -u \
+      | while IFS= read -r _e_rel; do
+          [ -n "$_e_rel" ] || continue
+          _pl_verdict "$_e_src" "$_e_dst" "$_e_pol" "$_e_rel"
+          if _pl_drift_verdict "$PL_V" && ! _pl_writable "$PL_D"; then
+            PL_V=read-only
+          fi
+          _pl_record
+        done
+  done
+}
+
+# _pl_render <porcelain|table|flagged>: exit 1 unless every file is in
+# sync (app-held and unmanaged are in sync by definition: not ours).
+_pl_render() {
+  awk -v mode="$1" '
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        p = index($i, "="); f[substr($i, 1, p - 1)] = substr($i, p + 1)
+      }
+      if (!("verdict" in f)) {
+        print "muster: malformed record: " $0 > "/dev/stderr"; bad = 1; next
+      }
+      v = f["verdict"]
+      rb = (v != "in-sync" && v != "app-held" && v != "unmanaged")
+      if (rb) bad = 1
+      if (mode == "porcelain") { print; next }
+      if (mode == "flagged") { if (rb) print; next }
+      n++; pa[n] = f["path"]; vd[n] = v; po[n] = f["policy"]
+      if (length(vd[n]) > wv) wv = length(vd[n])
+    }
+    END {
+      if (mode == "table" && n > 0) {
+        if (wv < 7) wv = 7
+        fmt = "%-" wv "s  %-13s  %s\n"
+        printf fmt, "VERDICT", "POLICY", "PATH"
+        for (i = 1; i <= n; i++) printf fmt, vd[i], po[i], pa[i]
+      }
+      exit bad + 0
+    }'
+}
+
+# _pl_put <from> <to>: copy content AND mode, atomically (a temp beside the
+# target, then rename), and PROVE it. The TEMP is verified BEFORE the
+# rename, so a bad copy never replaces anything: verifying only after the
+# rename would detect the damage once it had already been done (a
+# deliberate break of the check showed it). The target is verified after
+# too: a write that did not land is a failure, never assumed (P4).
+_pl_put() {
+  mkdir -p -- "$(dirname -- "$2")" || return 1
+  _p_tmp=$(dirname -- "$2")/.${2##*/}$PL_TMP.$$
+  # shellcheck disable=SC2015  # any failure cleans up; that is the point
+  cp -- "$1" "$_p_tmp" && chmod "$(_pl_mode "$1")" "$_p_tmp" \
+    && _pl_same "$1" "$_p_tmp" && mv -f -- "$_p_tmp" "$2" \
+    || { rm -f -- "$_p_tmp"; return 1; }
+  # A rename that claimed success but did not land leaves the temp behind:
+  # clean it up, and fail.
+  _pl_same "$1" "$2" || { rm -f -- "$_p_tmp"; return 1; }
+}
+
+# _pl_drop <file>: remove a file (never a directory), then empty parents
+# up to, not including, <stop>. rm -f on one literal file: no -r anywhere.
+_pl_drop() {   # <file> <stop-dir>
+  rm -f -- "$1" || return 1
+  _q_d=$(dirname -- "$1")
+  while [ "$_q_d" != "$2" ] && [ "$_q_d" != / ] \
+    && rmdir -- "$_q_d" 2>/dev/null; do
+    _q_d=$(dirname -- "$_q_d")
+  done
+  [ ! -e "$1" ]
+}
+
+# _pl_displace <dest>: move a live edit aside (P4). Copied to
+# <state>/displaced/<run>/<absolute path> with its mode, and VERIFIED,
+# before anything may overwrite or remove the live file.
+_pl_displace() {
+  _x_to=$(_pl_state)/displaced/$PL_RUN$1
+  _pl_put "$1" "$_x_to" || return 1
+  printf 'displaced  %s -> %s\n' "$1" "$_x_to"
+}
+
+# _pl_act_one: carry out PL_V for the file the PL_ globals describe.
+# Returns 1 on any failure; the baseline moves only after a verified write.
+_pl_act_one() {
+  _a_root=$(_pl_state)/root
+  case $PL_V in
+    new|missing|place|migrate)
+      [ ! -h "$PL_D" ] || rm -f -- "$PL_D" || return 1
+      _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M" ;;
+    converged)
+      _pl_put "$PL_S" "$PL_M" ;;
+    displace)
+      if [ -e "$PL_D" ]; then _pl_displace "$PL_D" || return 1; fi
+      if [ -f "$PL_S" ]; then
+        _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M"
+      else
+        _pl_drop "$PL_D" "$PL_DR" && _pl_drop "$PL_M" "$_a_root"
+      fi ;;
+    orphan)
+      # app-owned: the live file is the application's; forget it only.
+      if [ "$PL_POL" != app-owned ] && [ -e "$PL_D" ]; then
+        _pl_drop "$PL_D" "$PL_DR" || return 1
+      fi
+      _pl_drop "$PL_M" "$_a_root" ;;
+    *) return 1 ;;
+  esac
+}
+
+# _pl_walk <fn> [path...]: the verdict of every managed file, computed AT
+# THE MOMENT the callback acts on it, so nothing acts on a stale view. With
+# paths, only files at or under one of them. A root that fails the guard
+# is reported and skipped whole.
+_pl_walk() {
+  _w_fn=$1; shift
+  _pl_roots | while read -r _w_src _w_dst _w_pol; do
+    if ! _pl_root_ok "$_w_src"; then
+      printf 'no-source  %s: missing, unreadable or empty; nothing under' \
+        "$_w_src"
+      printf ' %s is placed or removed\n' "$_w_dst"
+      continue
+    fi
+    { _pl_sources "$_w_src"; _pl_baselines "$_w_dst"; } | sort -u \
+      | while IFS= read -r _w_rel; do
+          [ -n "$_w_rel" ] || continue
+          _pl_selected "$_w_dst/$_w_rel" "$@" || continue
+          _pl_verdict "$_w_src" "$_w_dst" "$_w_pol" "$_w_rel"
+          "$_w_fn"
+        done
+  done
+}
+
+_pl_selected() {   # <dest> [path...]: no paths selects everything
+  _l_d=$1; shift
+  [ "$#" -gt 0 ] || return 0
+  for _l_p in "$@"; do
+    _l_p=$(_sv_tilde "$_l_p")
+    case $_l_d in "$_l_p"|"${_l_p%/}"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+_pl_place_cb() {
+  _pl_drift_verdict "$PL_V" && [ "$PL_V" != merge-back ] || return 0
+  if ! _pl_writable "$PL_D"; then
+    printf 'read-only  %s: not writable by this user; reported only\n' \
+      "$PL_D"; return 0
+  fi
+  if [ -n "$PL_DRY" ]; then printf 'would %-10s %s\n' "$PL_V" "$PL_D"
+  elif _pl_act_one; then printf '%-10s %s\n' "$PL_V" "$PL_D"
+  else printf 'FAILED     %s %s\n' "$PL_V" "$PL_D"; echo x >> "$PL_FAILS"
+  fi
+}
+
+# _pl_merge_cb: P5. Into the source WORKING TREE only, never committing,
+# and never into a source file git reports as modified (someone mid-edit).
+_pl_merge_cb() {
+  [ "$PL_V" = merge-back ] || return 0
+  if [ -n "$(git -C "$(dirname -- "$PL_S")" status --porcelain \
+      -- "$PL_S" 2>/dev/null)" ]; then
+    printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
+      "$PL_D" "$PL_S"; return 0
+  fi
+  if [ -n "$PL_DRY" ]; then printf 'would merge-back %s -> %s\n' \
+    "$PL_D" "$PL_S"; return 0; fi
+  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
+    printf 'merged     %s -> %s\n' "$PL_D" "$PL_S"
+  else printf 'FAILED     merge-back %s\n' "$PL_D"; echo x >> "$PL_FAILS"
+  fi
+}
+
+# _pl_act_main <callback> [--dry-run] [path...]: run the walk, then judge
+# what remains with a FRESH read. Exit 0 when everything is in sync, 1
+# when anything is left, 2 when a write failed or could not be made.
+_pl_act_main() {
+  _m_cb=$1; shift
+  PL_DRY=
+  case ${1:-} in --dry-run) PL_DRY=1; shift ;; esac
+  case ${1:-} in -*) echo "muster: unknown option '$1'" >&2; return 2 ;; esac
+  survey_config || return 2
+  [ -n "$(_pl_roots)" ] || { echo "muster: no \`place\` roots declared" >&2
+    return 2; }
+  PL_RUN=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  PL_FAILS=$(_pl_state)/.place-fails.$$
+  mkdir -p "$(_pl_state)" && : > "$PL_FAILS" || return 2
+  _pl_walk "$_m_cb" "$@"
+  _m_failed=$(wc -l < "$PL_FAILS" | tr -d ' ')
+  rm -f -- "$PL_FAILS"
+  [ "$_m_failed" = 0 ] || return 2
+  placement_records | _pl_render flagged > /dev/null
+}
+
+place_main() { _pl_act_main _pl_place_cb "$@"; }
+merge_back_main() { _pl_act_main _pl_merge_cb "$@"; }
+
+# placed_main [--porcelain] [path...]: every managed file and its verdict.
+placed_main() {
+  _d_mode=table
+  case ${1:-} in --porcelain) _d_mode=porcelain; shift ;; esac
+  case ${1:-} in -*) echo "muster: unknown option '$1'" >&2; return 2 ;; esac
+  survey_config || return 2
+  [ -n "$(_pl_roots)" ] || { echo "muster: no \`place\` roots declared" >&2
+    return 2; }
+  if [ "$#" = 0 ]; then placement_records | _pl_render "$_d_mode"; return
+  fi
+  placement_records | while IFS= read -r _d_r; do
+    _d_p=$(_st_unesc "$(_st_field "$_d_r" path)")
+    if _pl_selected "$_d_p" "$@"; then printf '%s\n' "$_d_r"; fi
+  done | _pl_render "$_d_mode"
+}
+
+# where_main <path>: resolve a path in either direction (P9).
+where_main() {
+  [ "$#" = 1 ] || { echo "usage: muster where <path>" >&2; return 2; }
+  survey_config || return 2
+  _h_p=$(_sv_tilde "$1")
+  _h_out=$(_pl_roots | while read -r _h_src _h_dst _h_pol; do
+    case $_h_p in
+      "$_h_dst"/*) printf '%s <- %s (%s)\n' "$_h_p" \
+        "$_h_src/${_h_p#"$_h_dst"/}" \
+        "$(_pl_policy "$_h_p" "$_h_pol")" ;;
+      "$_h_src"/*) printf '%s -> %s (%s)\n' "$_h_p" \
+        "$_h_dst/${_h_p#"$_h_src"/}" \
+        "$(_pl_policy "$_h_dst/${_h_p#"$_h_src"/}" "$_h_pol")" ;;
+    esac
+  done)
+  [ -n "$_h_out" ] || { echo "muster: $_h_p is not under a declared root" >&2
+    return 1; }
+  printf '%s\n' "$_h_out"
+}
+
+# placement_displaced: "<run> <absolute path>" for every kept edit (P4).
+placement_displaced() {
+  _z_root=$(_pl_state)/displaced
+  [ -d "$_z_root" ] || return 0
+  (cd "$_z_root" && find . -type f ! -name "*$PL_TMP.*") \
+    | sed 's|^\./||' | sort | while IFS= read -r _z_e; do
+      printf '%s /%s\n' "${_z_e%%/*}" "${_z_e#*/}"
+    done
+}
+
+# displaced_main [list | clear <run> <path> ... | clear --all]: the kept
+# edits. Clearing is a person's decision, after review (P4), so nothing
+# here clears on its own and `clear` names exactly what it removes.
+displaced_main() {
+  survey_config || return 2
+  _c_root=$(_pl_state)/displaced
+  case ${1:-list} in
+    list) placement_displaced; return 0 ;;
+    clear) shift ;;
+    *) echo "usage: muster displaced [list | clear <run> <path>..." \
+         "| clear --all]" >&2; return 2 ;;
+  esac
+  if [ "${1:-}" = --all ]; then
+    [ "$#" = 1 ] || { echo "muster: clear --all takes nothing else" >&2
+      return 2; }
+    # Line by line, never word-split: a displaced path may hold a space.
+    placement_displaced | while read -r _c_run _c_path; do
+      _pl_drop "$_c_root/$_c_run$_c_path" "$_c_root" \
+        && printf 'cleared    %s (%s)\n' "$_c_path" "$_c_run"
+    done
+    return 0
+  fi
+  [ "$#" -gt 0 ] && [ $(( $# % 2 )) = 0 ] \
+    || { echo "muster: clear takes <run> <path> pairs" >&2; return 2; }
+  while [ "$#" -gt 0 ]; do
+    case $1 in */*|.*|'') echo "muster: bad run '$1'" >&2; return 2 ;; esac
+    _c_f=$_c_root/$1$2
+    [ -f "$_c_f" ] || { echo "muster: no displaced $2 in run $1" >&2
+      return 2; }
+    _pl_drop "$_c_f" "$_c_root" && printf 'cleared    %s (%s)\n' "$2" "$1"
+    shift 2
+  done
+}
