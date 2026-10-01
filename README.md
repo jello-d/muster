@@ -154,7 +154,7 @@ One line per repo, space-separated `key=value`, every key on every line,
 `-` where a value does not apply, in this order:
 
     name state branch head upstream upstream_head ahead behind fetched
-    modified untracked deployed path
+    modified untracked deployed expect path
 
 `name` and `path` are percent-encoded (`%`, space, tab, newline), so no
 value can contain the separator. The table is rendered from these same
@@ -170,6 +170,11 @@ muster surveys every git repo one level under `~/src`.
                              discovery off. path defaults to root/name
     deployed <name> <path>   a deployed clone of <name>, compared with
                              origin: the third head
+    expect <name> <state>    <name> is DECLARED unreadable or absent:
+                             reported, marked (expected), and does not
+                             fail the run. Any other state is a loud
+                             `expect-mismatch`: a sealed tree that turns
+                             readable means its wall has a hole
     artifact <canonical> <relpath>... [requires <relpath>...]
                              a vendored file for owed to judge. A repo
                              has adopted it if it carries it at one of

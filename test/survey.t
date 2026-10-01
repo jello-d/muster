@@ -319,7 +319,7 @@ fi
 
 # === every record has every key, in order ===================================
 KEYS='name state branch head upstream upstream_head ahead behind fetched'
-KEYS="$KEYS modified untracked deployed path"
+KEYS="$KEYS modified untracked deployed expect path"
 survey clean nosuch plain unborn detached
 assert "five records for five names" \
   test "$(printf '%s\n' "$OUT" | wc -l)" -eq 5
@@ -344,8 +344,8 @@ done
 MUSTER_ROOT=$S survey
 assert "four odd names, four records" \
   test "$(printf '%s\n' "$OUT" | wc -l)" -eq 4
-assert "every record has exactly 13 fields" \
-  test -z "$(printf '%s\n' "$OUT" | awk 'NF != 13')"
+assert "every record has exactly 14 fields" \
+  test -z "$(printf '%s\n' "$OUT" | awk 'NF != 14')"
 expect "has%20space" state unborn,no-upstream
 expect "tab%09in" state unborn,no-upstream
 expect "pct%2525" state unborn,no-upstream
@@ -418,6 +418,47 @@ OUT=$(unset MUSTER_CONFIG; MUSTER_ROOT=$D "$MUSTER" survey --porcelain)
 assert "the default config path is honoured" \
   test "$(printf '%s\n' "$OUT" | awk '{print $1}')" = name=mid
 rm -f "$HOME/.config/muster/repos"
+
+# === expect: a declared state is reported, not failed =====================
+# The severance case: a sealed work tree is unreadable from here BY DESIGN.
+X=$_T/expect
+mkdir -p "$X"
+if [ -n "$CAN_LOCK" ]; then
+  mkrepo sealed
+  chmod 000 "$ROOT/sealed"
+  printf 'expect sealed unreadable\n' > "$X/sealed"
+  MUSTER_CONFIG=$X/sealed survey sealed
+  expect sealed state unreadable
+  expect sealed expect unreadable
+  expect_rc 0 "an unreadable repo that is DECLARED unreadable"
+  OUTT=$(MUSTER_CONFIG=$X/sealed "$MUSTER" survey sealed 2>/dev/null)
+  assert "table: an expected state says so" \
+    has "$OUTT" "unreadable (expected)"
+  chmod 755 "$ROOT/sealed"
+  # The wall has a hole: declared unreadable, and it can be read.
+  MUSTER_CONFIG=$X/sealed survey sealed
+  expect sealed state expect-mismatch
+  expect_rc 1 "a declared-unreadable repo that is readable"
+fi
+printf 'expect ghost absent\n' > "$X/ghost"
+MUSTER_CONFIG=$X/ghost survey ghost
+expect ghost state absent
+expect_rc 0 "an absent repo declared absent"
+printf 'expect clean absent\n' > "$X/present"
+MUSTER_CONFIG=$X/present survey clean
+expect clean state expect-mismatch
+expect_rc 1 "declared absent, but present"
+printf 'expect nosuch unreadable\n' > "$X/wrong"
+MUSTER_CONFIG=$X/wrong survey nosuch
+expect nosuch state absent,expect-mismatch
+printf 'expect clean dirty\n' > "$X/bad"
+MUSTER_CONFIG=$X/bad survey clean
+expect_rc 2 "expect accepts only a closed list of states"
+printf 'expect clean\n' > "$X/short"
+MUSTER_CONFIG=$X/short survey clean
+expect_rc 2 "expect without a state"
+survey clean
+expect clean expect -
 
 # === R2: the deployed clone, the third head ==================================
 mkrepo pkg

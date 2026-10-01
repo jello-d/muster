@@ -14,7 +14,7 @@
 # every line, `-` where a value does not apply:
 #
 #   name state branch head upstream upstream_head ahead behind fetched
-#   modified untracked deployed path
+#   modified untracked deployed expect path
 #
 # Values that come from the filesystem (name, path) are percent-encoded
 # (% space tab newline), so a field can never contain the separator. That
@@ -67,7 +67,7 @@ _sv_flag() { SV_FLAGS="${SV_FLAGS:+$SV_FLAGS,}$1"; }
 _sv_reset() {
   SV_FLAGS='' SV_BRANCH=- SV_HEAD=- SV_UP=- SV_UPHEAD=- SV_AHEAD=- SV_BEHIND=-
   SV_FETCHED=- SV_MOD=- SV_UNTR=- SV_DEP=- SV_UPREF=
-  SV_FETCH_FAILED=
+  SV_FETCH_FAILED='' SV_EXPECT=-
 }
 
 # _sv_where <path> -> repo | absent | unreadable | not-a-repo
@@ -233,6 +233,7 @@ _sv_short() {   # <sha or word> -> 12-char sha, or the word unchanged
 # survey_record <name> <path> [<deployed-path>]: one line, every key.
 survey_record() {
   _sv_reset
+  SV_EXPECT=$(_sv_cfg expect "$1") || SV_EXPECT=-
   SV_STATE=$(_sv_where "$2")
   if [ "$SV_STATE" = repo ] && _sv_probe_git "$2"; then
     SV_STATE=
@@ -244,13 +245,23 @@ survey_record() {
     [ -z "${3:-}" ] || _sv_deployed "$3"
     SV_STATE=${SV_FLAGS:-ok}
   fi
+  # A DECLARED state that holds is not a finding; one that does not hold
+  # is, whichever way round: expected unreadable and now readable is the
+  # loudest thing this tool can say about a sealed tree.
+  if [ "$SV_EXPECT" != - ] && [ "$SV_STATE" != "$SV_EXPECT" ]; then
+    case $SV_STATE in
+      ok) SV_STATE=expect-mismatch ;;
+      *) SV_STATE=$SV_STATE,expect-mismatch ;;
+    esac
+  fi
   printf 'name=%s state=%s branch=%s head=%s upstream=%s' \
     "$(_sv_esc "$1")" "$SV_STATE" "$SV_BRANCH" "$(_sv_short "$SV_HEAD")" \
     "$SV_UP"
   printf ' upstream_head=%s ahead=%s behind=%s fetched=%s' \
     "$(_sv_short "$SV_UPHEAD")" "$SV_AHEAD" "$SV_BEHIND" "$SV_FETCHED"
-  printf ' modified=%s untracked=%s deployed=%s path=%s\n' \
-    "$SV_MOD" "$SV_UNTR" "$(_sv_short "$SV_DEP")" "$(_sv_esc "$2")"
+  printf ' modified=%s untracked=%s deployed=%s expect=%s path=%s\n' \
+    "$SV_MOD" "$SV_UNTR" "$(_sv_short "$SV_DEP")" "$SV_EXPECT" \
+    "$(_sv_esc "$2")"
 }
 
 # THE CONFIG is optional, and is where an integrator declares facts about
@@ -261,6 +272,11 @@ survey_record() {
 #   repo <name> [<path>]     declare the set explicitly; any `repo` line
 #                            turns discovery OFF. path defaults to root/name
 #   deployed <name> <path>   the deployed clone of <name> (the third head)
+#   expect <name> <state>    <name> is DECLARED to be in <state>, one of
+#                            unreadable or absent: reported, and does not
+#                            fail the run; any OTHER state is a loud
+#                            expect-mismatch (a sealed tree turning
+#                            readable means its wall has a hole)
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -291,6 +307,8 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
       root) [ -n "$_k_a" ] && continue ;;
       repo) [ -n "$_k_a" ] && continue ;;
       deployed|artifact) [ -n "$_k_a" ] && [ -n "$_k_b" ] && continue ;;
+      expect)
+        case $_k_b in unreadable|absent) continue ;; esac ;;
     esac
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1
@@ -308,6 +326,10 @@ _sv_cfg() {   # <directive> [<name>] -> the value
     [ "$_q_kw" = "$1" ] || continue
     case $1 in
       root) _sv_tilde "$_q_a${_q_b:+ $_q_b}"; return 0 ;;
+      expect)
+        [ "$_q_a" = "${2:-}" ] || continue
+        printf '%s' "$_q_b"
+        return 0 ;;
       repo|deployed)
         if [ -z "${2:-}" ]; then printf '%s\n' "$_q_a"; continue; fi
         [ "$_q_a" = "$2" ] || continue
@@ -381,10 +403,11 @@ _sv_render() {
         bad = 1
         next
       }
-      if (f["state"] != "ok") bad = 1
+      if (f["state"] != "ok" && f["state"] != f["expect"]) bad = 1
       if (mode == "porcelain") { print; next }
       n++
       nm[n] = f["name"]; br[n] = f["branch"]; st[n] = f["state"]
+      if (f["state"] == f["expect"]) st[n] = st[n] " (expected)"
       ah[n] = f["ahead"]; bh[n] = f["behind"]; fe[n] = age(f["fetched"])
       ch[n] = changes(f["modified"], f["untracked"])
       dp[n] = f["deployed"]; uh[n] = f["upstream_head"]; hd[n] = f["head"]

@@ -164,6 +164,27 @@ if [ -n "$CAN_LOCK" ]; then
   chmod 755 "$ROOT/locked"
 fi
 
+# === expect: declared states owe nothing; a broken declaration is unknown ===
+X=$_T/expect
+mkdir -p "$X"
+if [ -n "$CAN_LOCK" ]; then
+  mkrepo sealed
+  chmod 000 "$ROOT/sealed"
+  printf 'expect sealed unreadable\n' > "$X/sealed"
+  MUSTER_CONFIG=$X/sealed owed sealed
+  expect sealed owed nothing
+  expect sealed state unreadable
+  expect_rc 0 "owed: a declared-unreadable repo"
+  chmod 755 "$ROOT/sealed"
+  MUSTER_CONFIG=$X/sealed owed sealed
+  expect sealed owed unknown
+  expect sealed state expect-mismatch
+fi
+printf 'expect nosuch unreadable\n' > "$X/wrong"
+MUSTER_CONFIG=$X/wrong owed nosuch
+expect nosuch owed unknown
+assert "a suffixed terminal state raises no shell errors" test -z "$ERR"
+
 # === the deployed clone ======================================================
 C=$_T/cfg
 mkdir -p "$C"

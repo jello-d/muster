@@ -59,8 +59,14 @@ _ow_overlap() {
 
 # _ow_repo <path>: the git half of the ladder, from the survey's globals.
 _ow_repo() {
+  # Declared and holding: nothing is owed. The state still shows.
+  [ "$SV_STATE" != "$SV_EXPECT" ] || return 0
+  # Terminal states may carry a suffix (absent,expect-mismatch), and the
+  # mismatch is written onto the state rather than flagged, so both are
+  # matched on the state string, not the flag list.
   case $SV_STATE in
-    absent|unreadable|not-a-repo|broken) _ow_add unknown; return 0 ;;
+    absent*|unreadable*|not-a-repo*|broken*|*expect-mismatch*)
+      _ow_add unknown; return 0 ;;
   esac
   for _r_f in fetch-failed upstream-gone no-upstream detached unborn \
       count-failed status-failed; do
