@@ -1,0 +1,296 @@
+# shellcheck shell=sh
+# owed_lib - what each repo is owed to agree with its origin, and with the
+# canonical copy of every vendored file it carries.
+#
+# Sourced by bin/muster after survey_lib, never executed. Read-only apart
+# from the fetch, like the survey: it DIAGNOSES, and acting on the answer
+# is a separate verb, so the diagnosis can be trusted to change nothing.
+#
+# WHY THIS SHAPE (shared-notes muster.md, "Prioritisation"): box A
+# went red twice on 2026-09-30 from one structural cause, a canonical
+# change fanned out on one box and never caught up on the other. Both
+# times the remedy was per-repo catch-up, decided by this ladder, and
+# reconciliation of a vendored file was needed zero times:
+#
+#   behind, clean                    -> pull       (ff-only)
+#   diverged, files disjoint         -> rebase,push
+#   diverged, files overlapping      -> escalate   (touch nothing)
+#   dirty and behind                 -> skip       (never touch)
+#   ahead only                       -> push
+#   anything it could not establish  -> unknown    (state says why)
+#
+# EVERY VERDICT RESTS ON A FETCH, so owed fetches by default. --no-fetch
+# keeps the refs as they are, and every record still carries the fetch
+# time its verdict was computed from.
+#
+# THE RECORD, like the survey's, is one line of key=value, every key:
+#
+#   name owed state ahead behind fetched overlap artifacts path
+#
+# owed is a comma list (`nothing` when empty); state is the survey's;
+# overlap is the first path both sides changed (escalate only); artifacts
+# is `<relpath>:<verdict>` per vendored file the repo carries.
+
+_ow_add() {   # <verdict>: append once
+  case ,$OW_LIST, in
+    *,"$1",*) ;;
+    *) OW_LIST="${OW_LIST:+$OW_LIST,}$1" ;;
+  esac
+}
+
+_ow_has() { case ,$SV_FLAGS, in *,"$1",*) return 0 ;; esac; return 1; }
+
+# _ow_overlap <path>: the first path changed on BOTH sides since the merge
+# base, printed; fails (prints nothing) when the sides are disjoint.
+# Paths are git-quoted, so each is one line and both sides quote alike.
+_ow_overlap() {
+  _v_mb=$(_sv_git "$1" merge-base HEAD "$SV_UPREF") || { echo -; return; }
+  {
+    _sv_git "$1" -c core.quotePath=true diff --no-renames --name-only \
+      "$_v_mb" HEAD | sed 's/^/L /'
+    _sv_git "$1" -c core.quotePath=true diff --no-renames --name-only \
+      "$_v_mb" "$SV_UPREF" | sed 's/^/R /'
+  } | awk '
+    { k = substr($0, 3) }
+    $1 == "L" { l[k] = 1; next }
+    k in l { print k; found = 1; exit }
+    END { exit !found }'
+}
+
+# _ow_repo <path>: the git half of the ladder, from the survey's globals.
+_ow_repo() {
+  case $SV_STATE in
+    absent|unreadable|not-a-repo|broken) _ow_add unknown; return 0 ;;
+  esac
+  for _r_f in fetch-failed upstream-gone no-upstream detached unborn \
+      count-failed status-failed; do
+    if _ow_has "$_r_f"; then _ow_add unknown; return 0; fi
+  done
+  _ow_has deployed-differs && _ow_add redeploy
+  if [ "$SV_BEHIND" -gt 0 ] && _ow_has dirty; then _ow_add skip; return 0; fi
+  if [ "$SV_BEHIND" -gt 0 ] && [ "$SV_AHEAD" -gt 0 ]; then
+    _ow_diverged "$1"
+  elif [ "$SV_BEHIND" -gt 0 ]; then
+    _ow_add pull
+  elif [ "$SV_AHEAD" -gt 0 ]; then
+    _ow_add push
+  fi
+}
+
+# _ow_diverged <path>: rebase only when it provably cannot touch local work:
+# no file changed on both sides, and no local merge for a rebase to
+# flatten. Anything else escalates, and escalate means touch nothing.
+_ow_diverged() {
+  if [ -n "$(_sv_git "$1" rev-list --merges "$SV_UPREF..HEAD")" ]; then
+    OW_OVERLAP=-
+    _ow_add escalate
+    return 0
+  fi
+  if OW_OVERLAP=$(_ow_overlap "$1"); then
+    _ow_add escalate
+  else
+    OW_OVERLAP=-
+    _ow_add rebase
+    _ow_add push
+  fi
+}
+
+# _ow_canon_status <canonical>: `ok`, or why the canonical copy cannot be
+# trusted. A canonical in a checkout that is behind, ahead, dirty or
+# unfetchable is not the canonical: re-seeding from it on 2026-09-30 was
+# avoided by a human checking, not by any tool.
+_ow_canon_status() {
+  [ -f "$1" ] && [ -r "$1" ] || { echo unreadable; return 0; }
+  _c_top=$(git -C "$(dirname -- "$1")" rev-parse --show-toplevel \
+    2>/dev/null) || { echo not-in-a-repo; return 0; }
+  survey_record canonical "$_c_top" >/dev/null
+  case $SV_STATE in
+    ok|dirty) ;;
+    *) echo "$SV_STATE"; return 0 ;;
+  esac
+  if [ -n "$(_sv_git "$_c_top" status --porcelain -- "$1")" ]; then
+    echo dirty
+  else
+    echo ok
+  fi
+}
+
+# _ow_canon_load: every `artifact` line, with its canonical's status, into
+# OW_ARTLIST as "<status> <canonical> <relpath>..." lines. Once per run.
+_ow_canon_load() {
+  OW_ARTLIST=
+  [ -e "$SV_CONFIG" ] || return 0
+  while read -r _l_kw _l_canon _l_rels || [ -n "$_l_kw" ]; do
+    [ "$_l_kw" = artifact ] || continue
+    _l_canon=$(_sv_tilde "$_l_canon")
+    _l_st=$(_ow_canon_status "$_l_canon")
+    [ "$_l_st" = ok ] || printf '%s %s %s\n' "muster: canonical" \
+      "$_l_canon is $_l_st, so its copies are unknown rather than judged" \
+      "against it" >&2
+    OW_ARTLIST="$OW_ARTLIST$_l_st $_l_canon $_l_rels
+"
+  done < "$SV_CONFIG"
+}
+
+# _ow_art_verdict <repo> <relpath> <canonical> <canonical-status>
+_ow_art_verdict() {
+  case ,$OW_LIST, in *,unknown,*) echo unknown; return 0 ;; esac
+  [ "$4" = ok ] && [ -r "$1/$2" ] || { echo unknown; return 0; }
+  if cmp -s -- "$1/$2" "$3"; then echo ok; return 0; fi
+  if [ -n "$(_sv_git "$1" status --porcelain -- "$2")" ]; then
+    echo skip; return 0
+  fi
+  [ -n "$SV_UPREF" ] || { echo unknown; return 0; }
+  # The OPPOSITE REMEDIES (house notes): origin already carries the
+  # canonical, so pulling fixes it and re-seeding would commit a change
+  # the remote already has; or it does not, and a re-seed is owed.
+  if _sv_git "$1" show "$SV_UPREF:$2" 2>/dev/null | cmp -s - "$3"; then
+    echo pull
+  else
+    echo reseed
+  fi
+}
+
+# _ow_optin <repo> <relpath...> [requires <relpath...>]: the first relpath
+# the repo carries, printed; fails when it carries none, or carries one
+# but none of the `requires` paths.
+#
+# REQUIRES EXISTS BECAUSE CARRYING A FILE IS NOT ALWAYS OPTING IN. A repo
+# with a pre-commit hook of its OWN (shared-notes has one) carries a file at
+# the vendored hook's path without ever having adopted it. tackup learned
+# this first: there, the conventions TEST is the opt-in and the hook is
+# judged only beside it. Faulting a repo for a convention it never adopted
+# is how a check earns being ignored.
+_ow_optin() {
+  _i_repo=$1; shift
+  _i_hit='' _i_req='' _i_mode=paths
+  for _i_r in "$@"; do
+    if [ "$_i_r" = requires ]; then _i_mode=req; _i_req=no; continue; fi
+    [ -e "$_i_repo/$_i_r" ] || continue
+    if [ "$_i_mode" = paths ]; then
+      [ -n "$_i_hit" ] || _i_hit=$_i_r
+    else
+      _i_req=yes
+    fi
+  done
+  [ -n "$_i_hit" ] && [ "$_i_req" != no ] || return 1
+  printf '%s\n' "$_i_hit"
+}
+
+# _ow_artifacts <repo>: every vendored file it has opted into (above).
+# A pull verdict does not roll up: the git half already says pull.
+_ow_artifacts() {
+  OW_ARTS=
+  while read -r _a_st _a_canon _a_rels; do
+    [ -n "$_a_st" ] || continue
+    # shellcheck disable=SC2086  # relpaths are words, split on purpose
+    _a_rel=$(_ow_optin "$1" $_a_rels) || continue
+    _a_v=$(_ow_art_verdict "$1" "$_a_rel" "$_a_canon" "$_a_st")
+    OW_ARTS="${OW_ARTS:+$OW_ARTS,}$_a_rel:$_a_v"
+    case $_a_v in reseed|skip|unknown) _ow_add "$_a_v" ;; esac
+  done <<ARTS
+$OW_ARTLIST
+ARTS
+  [ -n "$OW_ARTS" ] || OW_ARTS=-
+}
+
+# owed_record <name> <path> [<deployed-path>]: the survey's computation,
+# then the ladder on top of it. One line, every key.
+owed_record() {
+  survey_record "$@" >/dev/null
+  OW_LIST='' OW_OVERLAP=-
+  _ow_repo "$2"
+  _ow_artifacts "$2"
+  [ -n "$OW_LIST" ] || OW_LIST=nothing
+  printf 'name=%s owed=%s state=%s ahead=%s behind=%s fetched=%s' \
+    "$(_sv_esc "$1")" "$OW_LIST" "$SV_STATE" "$SV_AHEAD" "$SV_BEHIND" \
+    "$SV_FETCHED"
+  printf ' overlap=%s artifacts=%s path=%s\n' \
+    "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$(_sv_esc "$2")"
+}
+
+# _ow_render <porcelain|table>: records on stdin; exits 1 unless every
+# repo is owed nothing, so the status is computed from the records shown.
+# Over the 50-line guideline for the same reason as _sv_render: it is one
+# awk program, and splitting it would split the renderer.
+_ow_render() {
+  awk -v mode="$1" -v now="$(date +%s)" '
+    function age(t, d) {
+      if (t == "-" || t == "never") return t
+      d = now - t
+      if (d < 0) d = 0
+      if (d < 120) return d "s"
+      if (d < 7200) return int(d / 60) "m"
+      if (d < 172800) return int(d / 3600) "h"
+      return int(d / 86400) "d"
+    }
+    function add(w, s) { return w (w == "" ? "" : "; ") s }
+    function why(  w, n, a, i) {
+      # The state, minus ahead and behind: the counts below say those.
+      w = ""
+      n = split(f["state"], a, ",")
+      for (i = 1; i <= n; i++)
+        if (a[i] != "ok" && a[i] != "ahead" && a[i] != "behind")
+          w = add(w, a[i])
+      if (f["ahead"] + 0 > 0) w = add(w, "ahead " f["ahead"])
+      if (f["behind"] + 0 > 0) w = add(w, "behind " f["behind"])
+      if (f["overlap"] != "-") w = add(w, "both changed " f["overlap"])
+      n = split(f["artifacts"], a, ",")
+      for (i = 1; i <= n; i++)
+        if (a[i] != "-" && a[i] !~ /:ok$/) w = add(w, a[i])
+      return w == "" ? "-" : w
+    }
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        k = $i; sub(/=.*/, "", k)
+        v = $i; sub(/^[^=]*=/, "", v)
+        f[k] = v
+      }
+      if (!("owed" in f) || !("name" in f)) {
+        print "muster: malformed record: " $0 > "/dev/stderr"
+        bad = 1
+        next
+      }
+      if (f["owed"] != "nothing") bad = 1
+      if (mode == "porcelain") { print; next }
+      n++
+      nm[n] = f["name"]; ow[n] = f["owed"]; fe[n] = age(f["fetched"])
+      wy[n] = why()
+      if (length(nm[n]) > wn) wn = length(nm[n])
+      if (length(ow[n]) > wo) wo = length(ow[n])
+    }
+    END {
+      if (mode == "table" && n > 0) {
+        if (wn < 4) wn = 4
+        if (wo < 4) wo = 4
+        fmt = "%-" wn "s  %-" wo "s  %7s  %s\n"
+        printf fmt, "REPO", "OWED", "FETCHED", "WHY"
+        for (i = 1; i <= n; i++) printf fmt, nm[i], ow[i], fe[i], wy[i]
+      }
+      exit bad + 0
+    }'
+}
+
+owed_main() {
+  SV_MODE=table SV_DO_FETCH=1
+  # shellcheck disable=SC2034  # SV_DO_FETCH is read by survey_lib
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --porcelain) SV_MODE=porcelain ;;
+      --no-fetch) SV_DO_FETCH= ;;
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster owed: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  survey_setup "$@" || return 2
+  _ow_canon_load
+  _m_out=$(SV_RECORD_FN=owed_record survey_records "$@") \
+    || { echo "muster: owed itself failed" >&2; return 2; }
+  [ -n "$_m_out" ] \
+    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  printf '%s\n' "$_m_out" | _ow_render "$SV_MODE"
+}

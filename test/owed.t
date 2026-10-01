@@ -1,0 +1,389 @@
+#!/bin/sh
+# test/owed.t - `muster owed`, against real git repos: every rung of the
+# catch-up ladder, the vendored-file verdicts, and a canonical that
+# cannot be trusted.
+#
+# Prints `ok   owed (N checks)` or `FAIL owed:` and every failure.
+set -u
+
+H_NAME=owed
+# shellcheck source=SCRIPTDIR/harness_lib
+. "$(dirname -- "$0")/harness_lib"
+
+# owed [args...]: run it, porcelain, into OUT / ERR / RC
+owed() {
+  OUT=$("$MUSTER" owed --porcelain "$@" 2>"$_T/err" </dev/null)
+  RC=$?
+  ERR=$(cat "$_T/err")
+}
+commit_file() {   # <repo> <file> <content> <message>
+  mkdir -p "$(dirname -- "$1/$2")"
+  printf '%s\n' "$3" > "$1/$2"
+  g "$1" add -- "$2"
+  g "$1" commit -m "$4"
+}
+
+# === the ladder ==============================================================
+
+mkrepo current
+owed current
+expect current owed nothing
+expect current state ok
+expect current overlap -
+expect current artifacts -
+expect_rc 0 "a repo owed nothing"
+
+# owed fetches by default: the upstream moved and nobody fetched.
+mkrepo behind
+upstream_moves behind
+owed --no-fetch behind
+expect behind owed nothing
+assert "--no-fetch: the stale verdict still carries its fetch time" \
+  test "$(field behind fetched)" -gt 0
+owed behind
+expect behind owed pull
+expect behind behind 1
+expect_rc 1 "a repo owed a pull"
+
+mkrepo ahead
+commit_file "$ROOT/ahead" new "x" local
+owed ahead
+expect ahead owed push
+
+# Dirty and behind: a pull would touch someone's work in progress.
+mkrepo dirtybehind
+upstream_moves dirtybehind
+echo wip >> "$ROOT/dirtybehind/f"
+owed dirtybehind
+expect dirtybehind owed skip
+expect dirtybehind state behind,dirty
+
+# Dirty and ahead: a push does not touch the work tree, so it is owed.
+mkrepo dirtyahead
+commit_file "$ROOT/dirtyahead" new "x" local
+echo wip > "$ROOT/dirtyahead/w"
+owed dirtyahead
+expect dirtyahead owed push
+
+mkrepo dirtycurrent
+echo wip > "$ROOT/dirtycurrent/w"
+owed dirtycurrent
+expect dirtycurrent owed nothing
+expect dirtycurrent state dirty
+
+# Diverged, the two sides touched different files: the vicus case.
+mkrepo disjoint
+upstream_moves disjoint
+commit_file "$ROOT/disjoint" mine "x" local
+owed disjoint
+expect disjoint owed rebase,push
+expect disjoint overlap -
+
+# Diverged on the same file: touch nothing, and say which file.
+mkrepo overlap
+upstream_moves overlap
+echo local >> "$ROOT/overlap/f"
+g "$ROOT/overlap" commit -am local
+owed overlap
+expect overlap owed escalate
+expect overlap overlap f
+
+# A rename is BOTH paths, so a local rename of a file upstream edited is
+# an overlap, not a disjoint change that a rebase could replay blind.
+mkrepo renamed
+upstream_moves renamed
+g "$ROOT/renamed" mv f moved
+g "$ROOT/renamed" commit -m rename
+owed renamed
+expect renamed owed escalate
+expect renamed overlap f
+
+# A local merge would be flattened by a rebase: escalate, whatever files.
+mkrepo merged
+upstream_moves merged
+g "$ROOT/merged" checkout -b side
+commit_file "$ROOT/merged" side "x" side
+g "$ROOT/merged" checkout main
+commit_file "$ROOT/merged" main2 "x" main2
+g "$ROOT/merged" merge --no-ff -m merge side
+owed merged
+expect merged owed escalate
+expect merged overlap -
+
+# An overlapping path with a space stays one field.
+mkrepo spaced
+mkdir -p "$_T/other"
+git clone -q "$_T/origins/spaced.git" "$_T/other/spaced" 2>/dev/null
+commit_file "$_T/other/spaced" "a b" "theirs" theirs
+g "$_T/other/spaced" push
+commit_file "$ROOT/spaced" "a b" "mine" mine
+owed spaced
+expect spaced owed escalate
+expect spaced overlap a%20b
+assert "spaced: the record still has 9 fields" \
+  test "$(rec spaced | awk '{print NF}')" -eq 9
+
+# === what it could not establish is unknown, never a guess ===================
+
+mkrepo nofetch
+mkrepo fetchok
+upstream_moves nofetch
+upstream_moves fetchok
+g "$ROOT/nofetch" remote set-url origin "$_T/origins/vanished.git"
+owed nofetch fetchok
+expect nofetch owed unknown
+expect nofetch state fetch-failed
+expect fetchok owed pull
+assert "a failed fetch is named on stderr" has "$ERR" vanished
+
+mkrepo noup
+g "$ROOT/noup" checkout -b solo
+owed noup
+expect noup owed unknown
+expect noup state no-upstream
+
+mkrepo detached
+g "$ROOT/detached" checkout --detach
+owed detached
+expect detached owed unknown
+
+git init -q "$ROOT/unborn"
+owed unborn
+expect unborn owed unknown
+
+owed nosuch
+expect nosuch owed unknown
+expect nosuch state absent
+
+if [ -n "$CAN_LOCK" ]; then
+  mkrepo locked
+  chmod 000 "$ROOT/locked"
+  owed locked
+  expect locked owed unknown
+  expect locked state unreadable
+  chmod 755 "$ROOT/locked"
+fi
+
+# === the deployed clone ======================================================
+C=$_T/cfg
+mkdir -p "$C"
+mkrepo pkg
+git clone -q "$_T/origins/pkg.git" "$_T/deployed-pkg" 2>/dev/null
+upstream_moves pkg
+g "$ROOT/pkg" pull --ff-only
+printf 'deployed pkg %s\n' "$_T/deployed-pkg" > "$C/dep"
+MUSTER_CONFIG=$C/dep owed pkg
+expect pkg owed redeploy
+
+# === read-only: owed changes nothing it was not asked to fetch ==============
+mkrepo ro
+upstream_moves ro
+echo wip > "$ROOT/ro/w"
+touch "$ROOT/ro/f"
+_head=$(git -C "$ROOT/ro" rev-parse HEAD)
+_status=$(git -C "$ROOT/ro" status --porcelain)
+sleep 1
+touch "$_T/marker"
+owed --no-fetch ro
+assert "--no-fetch: nothing under .git changed" \
+  test -z "$(find "$ROOT/ro/.git" -newer "$_T/marker")"
+owed ro
+expect ro owed skip
+assert "owed: HEAD did not move" \
+  test "$(git -C "$ROOT/ro" rev-parse HEAD)" = "$_head"
+assert "owed: the work tree is exactly as it was" \
+  test "$(git -C "$ROOT/ro" status --porcelain)" = "$_status"
+assert "owed: no work-tree file was written" \
+  test -z "$(find "$ROOT/ro" -path "$ROOT/ro/.git" -prune -o \
+    -newer "$_T/marker" -print)"
+
+# === vendored artifacts ======================================================
+# A canonical repo, and a config naming the file and where repos carry it.
+CANON_V1='# conventions, v1'
+CANON_V2='# conventions, v2'
+mkrepo notes
+commit_file "$ROOT/notes" _conv "$CANON_V1" v1
+g "$ROOT/notes" push
+CANON=$ROOT/notes/_conv
+printf 'artifact %s test/conv.t alt/conv.t\n' "$CANON" > "$C/art"
+art() { MUSTER_CONFIG=$C/art owed "$@"; }
+
+mkrepo vmatch
+commit_file "$ROOT/vmatch" test/conv.t "$CANON_V1" seed
+g "$ROOT/vmatch" push
+art vmatch
+expect vmatch artifacts test/conv.t:ok
+expect vmatch owed nothing
+
+mkrepo valt
+commit_file "$ROOT/valt" alt/conv.t "$CANON_V1" seed
+g "$ROOT/valt" push
+art valt
+expect valt artifacts alt/conv.t:ok
+
+mkrepo vnone
+art vnone
+expect vnone artifacts -
+
+# The canonical moves on (committed and pushed): every copy now differs.
+commit_file "$ROOT/notes" _conv "$CANON_V2" v2
+g "$ROOT/notes" push
+
+# Origin does not carry v2 either: a re-seed is owed.
+art vmatch
+expect vmatch artifacts test/conv.t:reseed
+expect vmatch owed reseed
+
+# Origin ALREADY carries v2 (the other box re-seeded and pushed): pull,
+# and do NOT re-seed, which would commit what the remote already has.
+mkrepo vbehind
+commit_file "$ROOT/vbehind" test/conv.t "$CANON_V1" seed
+g "$ROOT/vbehind" push
+git clone -q "$_T/origins/vbehind.git" "$_T/other/vbehind" 2>/dev/null
+commit_file "$_T/other/vbehind" test/conv.t "$CANON_V2" reseed
+g "$_T/other/vbehind" push
+# Unfetched, the stale ref cannot see the other box's re-seed, so the
+# verdict is reseed AND the record says how old its evidence is. Fetched,
+# the verdict flips to pull. That flip is the reason owed fetches.
+art --no-fetch vbehind
+expect vbehind artifacts test/conv.t:reseed
+art vbehind
+expect vbehind artifacts test/conv.t:pull
+expect vbehind owed pull
+
+# Someone is editing the copy right now: leave it alone.
+mkrepo vdirty
+commit_file "$ROOT/vdirty" test/conv.t "$CANON_V1" seed
+g "$ROOT/vdirty" push
+echo '# in flight' >> "$ROOT/vdirty/test/conv.t"
+art vdirty
+expect vdirty artifacts test/conv.t:skip
+expect vdirty owed skip
+
+# A repo whose own state is unknown cannot have its copy judged.
+mkrepo vgone
+commit_file "$ROOT/vgone" test/conv.t "$CANON_V1" seed
+g "$ROOT/vgone" push
+g "$ROOT/vgone" remote set-url origin "$_T/origins/vgone-missing.git"
+art vgone
+expect vgone artifacts test/conv.t:unknown
+expect vgone owed unknown
+
+# --- requires: carrying a file is not always adopting it ---------------------
+# A repo with a hook of its OWN at the vendored hook's path never adopted
+# the vendored one; only a repo that carries the test has.
+commit_file "$ROOT/notes" _hook "# vendored hook" hook
+g "$ROOT/notes" push
+printf 'artifact %s .githooks/pre-commit requires %s %s\n' \
+  "$ROOT/notes/_hook" test/conv.t modules/tests/conv.t > "$C/req"
+mkrepo ownhook
+commit_file "$ROOT/ownhook" .githooks/pre-commit "# my own hook" own
+g "$ROOT/ownhook" push
+MUSTER_CONFIG=$C/req owed ownhook
+expect ownhook artifacts -
+expect ownhook owed nothing
+mkrepo adopted
+commit_file "$ROOT/adopted" .githooks/pre-commit "# vendored hook" hook
+commit_file "$ROOT/adopted" modules/tests/conv.t "x" test
+g "$ROOT/adopted" push
+MUSTER_CONFIG=$C/req owed adopted
+expect adopted artifacts .githooks/pre-commit:ok
+commit_file "$ROOT/adopted" .githooks/pre-commit "# drifted" drift
+g "$ROOT/adopted" push
+MUSTER_CONFIG=$C/req owed adopted
+expect adopted artifacts .githooks/pre-commit:reseed
+
+# --- a canonical that cannot be trusted --------------------------------------
+# Every way the canonical's checkout can be wrong makes its copies unknown.
+canon_untrusted() {   # <description>: vmatch must read unknown
+  art vmatch
+  expect vmatch artifacts test/conv.t:unknown
+  assert "$1: stderr says the canonical is not trusted" \
+    has "$ERR" "canonical $CANON is"
+}
+echo '# local edit' >> "$CANON"
+canon_untrusted "canonical dirty"
+g "$ROOT/notes" checkout -- _conv
+
+commit_file "$ROOT/notes" _conv "# v3, unpushed" v3
+canon_untrusted "canonical ahead (unpushed)"
+g "$ROOT/notes" reset --hard origin/main
+
+git clone -q "$_T/origins/notes.git" "$_T/other/notes" 2>/dev/null
+commit_file "$_T/other/notes" _conv "# v4, from the other box" v4
+g "$_T/other/notes" push
+canon_untrusted "canonical behind its origin"
+g "$ROOT/notes" pull --ff-only
+
+printf 'artifact %s/nope test/conv.t\n' "$ROOT/notes" > "$C/missing"
+MUSTER_CONFIG=$C/missing owed vmatch
+expect vmatch artifacts test/conv.t:unknown
+
+# An unrelated dirty file in the canonical repo does not taint it.
+echo scratch > "$ROOT/notes/scratch"
+art vmatch
+expect vmatch artifacts test/conv.t:reseed
+assert "an unrelated dirty file: no warning" test -z "$ERR"
+
+# === the command line, and one computation for both views ===================
+cli() {
+  OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
+  RC=$?
+  ERR=$(cat "$_T/err")
+}
+cli owed --bogus
+expect_rc 2 "owed: an unknown option"
+cli owed ''
+expect_rc 2 "owed: an empty name"
+cli owed current
+expect_rc 0 "owed table, owed nothing"
+assert "owed table: has a header" starts "$OUT" REPO
+cli owed --no-fetch -- current
+expect_rc 0 "owed: -- ends the options"
+cli owed --no-fetch behind
+assert "table WHY: the count, not the state word as well" \
+  test "$(printf '%s\n' "$OUT" | awk '$1 == "behind" {
+    sub(/^[^ ]+ +[^ ]+ +[^ ]+ +/, ""); print }')" = "behind 1"
+
+set -- current behind ahead dirtybehind disjoint overlap noup nosuch
+OUTP=$("$MUSTER" owed --porcelain --no-fetch "$@" 2>/dev/null); RCP=$?
+OUTT=$("$MUSTER" owed --no-fetch "$@" 2>/dev/null); RCT=$?
+assert "R10: same exit from both views" test "$RCP" = "$RCT"
+assert "R10: one table row per record, plus the header" \
+  test "$(printf '%s\n' "$OUTT" | wc -l)" \
+  -eq "$(( $(printf '%s\n' "$OUTP" | wc -l) + 1 ))"
+assert "R10: each record's owed list is on its table row" \
+  test -z "$(printf '%s\n' "$OUTP" | while read -r _r; do
+    _nm=$(printf '%s\n' "$_r" | tr ' ' '\n' | sed -n 's/^name=//p')
+    _ow=$(printf '%s\n' "$_r" | tr ' ' '\n' | sed -n 's/^owed=//p')
+    printf '%s\n' "$OUTT" | awk -v n="$_nm" -v o="$_ow" \
+      '$1 == n && $2 == o { f = 1 } END { exit !f }' || echo "$_nm"
+  done)"
+KEYS='name owed state ahead behind fetched overlap artifacts path'
+assert "every record carries every key, in order" \
+  test -z "$(printf '%s\n' "$OUTP" | awk -v want="$KEYS" '{
+    s = ""
+    for (i = 1; i <= NF; i++) { k = $i; sub(/=.*/, "", k); s = s " " k }
+    if (substr(s, 2) != want) print
+  }')"
+assert "no value is empty" \
+  test -z "$(printf '%s\n' "$OUTP" | tr ' ' '\n' | grep '=$')"
+
+# Same records, byte for byte, from every interpreter present.
+BASE=$(MUSTER_CONFIG=$C/art sh "$MUSTER" owed --porcelain --no-fetch \
+  "$@" vmatch vbehind 2>/dev/null)
+for _sh in dash bash ksh mksh zsh; do
+  command -v "$_sh" >/dev/null 2>&1 || continue
+  _o=$(MUSTER_CONFIG=$C/art "$_sh" "$MUSTER" owed --porcelain --no-fetch \
+    "$@" vmatch vbehind 2>&1)
+  assert "$_sh: the same owed records as sh" test "$_o" = "$BASE"
+done
+
+# shellcheck source=SCRIPTDIR/../lib/survey_lib
+. "$HERE/../lib/survey_lib"
+# shellcheck source=SCRIPTDIR/../lib/owed_lib
+. "$HERE/../lib/owed_lib"
+printf 'garbage\n' | _ow_render porcelain >/dev/null 2>&1
+assert "a malformed record fails the render" test "$?" = 1
+
+h_verdict

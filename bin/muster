@@ -26,6 +26,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/survey_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/survey_lib
 . "$MUSTER_LIB/survey_lib"
+[ -f "$MUSTER_LIB/owed_lib" ] \
+  || { echo "muster: $MUSTER_LIB/owed_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/owed_lib
+. "$MUSTER_LIB/owed_lib"
 
 usage() {
   cat <<'EOF'
@@ -36,14 +40,21 @@ commands:
          report the state of every repo in the set: dirty, ahead, behind
          as of the last fetch, no upstream, unreadable, and where a
          deployed clone is declared, whether it matches origin
+  owed   [--porcelain] [--no-fetch] [name...]
+         what each repo is owed to agree with origin and with the
+         canonical copy of each vendored file: pull, rebase, push,
+         escalate, skip, reseed, redeploy, or unknown. Fetches first;
+         changes nothing else.
   help   this text
 
-exit: 0 every repo is ok, 1 something needs attention, 2 could not run
+exit: 0 every repo is ok (for owed: owed nothing), 1 something needs
+      attention, 2 could not run
 EOF
 }
 
 case ${1:-} in
   survey) shift; survey_main "$@" ;;
+  owed) shift; owed_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;
