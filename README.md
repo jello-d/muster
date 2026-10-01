@@ -59,6 +59,8 @@ Diagnose with nothing, repair with tools.
     muster survey --fetch         fetch first (the only network use)
     muster survey mux tackup      just these
     muster owed                   what each repo is owed (fetches first)
+    muster catch-up --dry-run     what catch-up would do
+    muster catch-up               fast-forward and safe-rebase the set
 
 Exit status: 0 when every repo is ok, 1 when anything needs attention,
 2 when the survey could not run at all (bad option, unreadable root or
@@ -115,6 +117,32 @@ with a warning naming it.
 Record: `name owed state ahead behind fetched overlap artifacts path`,
 with `artifacts` a comma list of `<relpath>:<verdict>`.
 
+### catch-up
+
+Acts on owed's `pull` and `rebase` verdicts and nothing else. It fetches,
+judges each repo with owed's own computation, and then:
+
+- `pull`: `git merge --ff-only` to the fetched upstream, then checks HEAD
+  is exactly that commit.
+- `rebase`: a non-interactive rebase onto the upstream, then a proof:
+  the local commits' diff must be byte-identical before and after. A
+  rebase that fails is aborted; one that altered the local work is reset
+  to the exact commit it started from. Both are checked, not assumed.
+
+Immediately before acting it re-checks that HEAD, the upstream ref and
+the clean tree are still what the verdict saw; if another session moved
+any of them, the repo is reported `changed-underfoot` and left alone.
+
+It NEVER pushes, and never touches a repo owed `skip`, `escalate`,
+`unknown`, `reseed` or `redeploy`. Each repo it acted on is judged again
+afterwards, so the `remaining` field says what is still owed (a rebased
+repo still owes its `push`).
+
+Record: `name action result from to owed remaining path`. Exit 0 only
+when every repo ends owing nothing and every action succeeded.
+`ABORT-FAILED` or `REVERT-FAILED` in the result column means a repo was
+left mid-operation and needs a human now.
+
 ### The porcelain
 
 One line per repo, space-separated `key=value`, every key on every line,
@@ -149,10 +177,12 @@ skipped line.
 
 ## Status
 
-`survey` and `owed` are implemented. Next is the verb that ACTS on
-owed's pull and rebase verdicts, then re-seeding; copier was verified
-by hand and set aside (see `docs/requirements.md`).
+`survey`, `owed` and `catch-up` are implemented. Re-seeding vendored
+files (owed's `reseed`) is not: it has been needed zero times so far,
+and copier was verified by hand and set aside (see
+`docs/requirements.md`). Running catch-up on a schedule is the
+integrator's decision.
 
 `test/run` runs the suite: the vendored conventions check, shellcheck,
-and `test/survey.t` and `test/owed.t`, which build real git repositories
-in a scratch directory rather than stubbing git.
+and `test/survey.t`, `test/owed.t` and `test/catchup.t`, which build
+real git repositories in a scratch directory rather than stubbing git.

@@ -30,6 +30,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/owed_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/owed_lib
 . "$MUSTER_LIB/owed_lib"
+[ -f "$MUSTER_LIB/catchup_lib" ] \
+  || { echo "muster: $MUSTER_LIB/catchup_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/catchup_lib
+. "$MUSTER_LIB/catchup_lib"
 
 usage() {
   cat <<'EOF'
@@ -45,16 +49,21 @@ commands:
          canonical copy of each vendored file: pull, rebase, push,
          escalate, skip, reseed, redeploy, or unknown. Fetches first;
          changes nothing else.
+  catch-up [--dry-run] [--porcelain] [name...]
+         act on owed's pull and rebase verdicts: fast-forward, or
+         rebase when no file changed on both sides, each verified after.
+         Touches nothing else, and never pushes.
   help   this text
 
-exit: 0 every repo is ok (for owed: owed nothing), 1 something needs
-      attention, 2 could not run
+exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
+      something needs attention, 2 could not run
 EOF
 }
 
 case ${1:-} in
   survey) shift; survey_main "$@" ;;
   owed) shift; owed_main "$@" ;;
+  catch-up) shift; catchup_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;

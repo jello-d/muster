@@ -1,0 +1,207 @@
+# shellcheck shell=sh
+# catchup_lib - act on owed's pull and rebase verdicts, and nothing else.
+#
+# Sourced by bin/muster after owed_lib, never executed. THIS IS THE FIRST
+# VERB THAT WRITES, so every rule here is about what it must not do:
+#
+#   - it acts only on `pull` and `rebase`, as judged by owed's one
+#     computation; skip, escalate, unknown, reseed and redeploy are
+#     reported and never touched
+#   - it never pushes: a push to another repo is a human's decision, so a
+#     rebased repo is left owing `push`, and says so
+#   - it re-checks, immediately before acting, that HEAD, the upstream ref
+#     and the clean tree are exactly what the verdict was computed from
+#     (R9: another session may have moved any of them meanwhile)
+#   - every write is VERIFIED after: a fast-forward must land on exactly
+#     the upstream commit, and a rebase must carry the local work through
+#     byte for byte, or it is put back
+#
+# WHY IT EXISTS (shared-notes muster.md, "Prioritisation"): box A went
+# red twice in one day and both times the remedy was this loop, typed by
+# hand: fast-forward the clean ones, rebase the one whose sides touched
+# different files, leave the dirty one alone.
+#
+# THE RECORD: name action result from to owed remaining path
+#   action     none | pull | rebase
+#   result     -, ok, dry-run, changed-underfoot, failed, aborted,
+#              reverted (the rebase changed local work, and was undone),
+#              and in capitals the two that need a human at once:
+#              ABORT-FAILED, REVERT-FAILED
+#   owed       the verdict acted on; remaining: owed, re-judged after
+
+# _cu_unchanged <path>: the repo is still exactly what owed judged.
+_cu_unchanged() {
+  _u_head=$(_sv_git "$1" rev-parse -q --verify HEAD) || return 1
+  _u_up=$(_sv_git "$1" rev-parse -q --verify "$SV_UPREF") || return 1
+  [ "$_u_head" = "$SV_HEAD" ] && [ "$_u_up" = "$SV_UPHEAD" ] \
+    && [ -z "$(_sv_git "$1" status --porcelain --untracked-files=normal)" ]
+}
+
+_cu_say() { printf 'muster: %s: %s\n' "$1" "$2" >&2; }
+
+# _cu_pull <path>: fast-forward only, then prove where it landed.
+_cu_pull() {
+  CU_ACTION=pull
+  if [ -n "$CU_DRY" ]; then CU_RESULT=dry-run; return 0; fi
+  if ! _cu_unchanged "$1"; then CU_RESULT=changed-underfoot; return 0; fi
+  if _cu_err=$(_sv_git "$1" merge --ff-only --quiet "$SV_UPREF" 2>&1 \
+      </dev/null) \
+    && [ "$(_sv_git "$1" rev-parse HEAD)" = "$SV_UPHEAD" ]; then
+    CU_RESULT=ok
+  else
+    CU_RESULT=failed
+    _cu_say "$1" "fast-forward failed: ${_cu_err:-HEAD did not land}"
+  fi
+  CU_TO=$(_sv_git "$1" rev-parse HEAD)
+}
+
+# _cu_diff <path> <from> <to>: the diff, in a form no user config alters.
+_cu_diff() {
+  _sv_git "$1" diff --no-ext-diff --no-color --no-renames --binary \
+    "$2" "$3"
+}
+
+# _cu_rebase <path>: replay the local commits onto the upstream, then
+# prove the local work came through unchanged.
+#
+# THE PROOF: owed only says rebase when no file was changed on both sides,
+# so the local commits' diff against the merge base must equal, byte for
+# byte, the rebased commits' diff against the new upstream. Anything else
+# means the rebase altered someone's work, and it is put back to the exact
+# commit it started from. That reset cannot lose anything: the tree was
+# verified clean a moment before, and the old commit is the whole state.
+_cu_rebase() {
+  CU_ACTION=rebase
+  if [ -n "$CU_DRY" ]; then CU_RESULT=dry-run; return 0; fi
+  if ! _cu_unchanged "$1"; then CU_RESULT=changed-underfoot; return 0; fi
+  _b_mb=$(_sv_git "$1" merge-base HEAD "$SV_UPREF") \
+    || { CU_RESULT=failed; _cu_say "$1" "no merge base"; return 0; }
+  _b_before=$(_cu_diff "$1" "$_b_mb" HEAD)
+  if ! _cu_err=$(GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true \
+      _sv_git "$1" -c rebase.autoStash=false -c rebase.updateRefs=false \
+      rebase --quiet "$SV_UPREF" 2>&1 </dev/null); then
+    _cu_abort "$1" "$_cu_err"
+    return 0
+  fi
+  if [ "$(_cu_diff "$1" "$SV_UPREF" HEAD)" = "$_b_before" ]; then
+    CU_RESULT=ok
+  else
+    _cu_say "$1" "the rebase changed the local work; reset to $SV_HEAD"
+    _sv_git "$1" reset --quiet --hard "$SV_HEAD" || :
+    if [ "$(_sv_git "$1" rev-parse HEAD)" = "$SV_HEAD" ]; then
+      CU_RESULT=reverted
+    else
+      CU_RESULT=REVERT-FAILED
+      _cu_say "$1" "COULD NOT RESET TO $SV_HEAD: inspect by hand"
+    fi
+  fi
+  CU_TO=$(_sv_git "$1" rev-parse HEAD)
+}
+
+# _cu_abort <path> <git's message>: undo a failed rebase, and prove it.
+# An abort that does not get back to the starting commit is the one
+# outcome this verb must never leave silently.
+# The abort itself may fail harmlessly: a rebase refused before it began
+# (a pre-rebase hook) leaves nothing to abort. Its exit status is no
+# evidence either way, so the HEAD check below is the only verdict, and
+# under set -e an unguarded failure here would end the whole run.
+_cu_abort() {
+  _sv_git "$1" rebase --abort >/dev/null 2>&1 || :
+  CU_TO=$(_sv_git "$1" rev-parse HEAD)
+  if [ "$CU_TO" = "$SV_HEAD" ] && [ -z "$(_sv_git "$1" status --porcelain)" ]
+  then
+    CU_RESULT=aborted
+    _cu_say "$1" "rebase failed and was aborted: $(printf '%s\n' "$2" \
+      | grep -v '^[[:space:]]*$' | head -n 1)"
+  else
+    CU_RESULT=ABORT-FAILED
+    _cu_say "$1" "REBASE ABORT DID NOT RESTORE $SV_HEAD: inspect by hand"
+  fi
+}
+
+# catchup_record <name> <path> [<deployed-path>]: judge, act, re-judge.
+catchup_record() {
+  owed_record "$@" >/dev/null
+  CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=-
+  CU_OWED=$OW_LIST
+  case ,$OW_LIST, in
+    *,pull,*) _cu_pull "$2" ;;
+    *,rebase,*) _cu_rebase "$2" ;;
+  esac
+  # Re-judged WITHOUT a fetch: the refs were fetched moments ago, and a
+  # second fetch could move the goalposts the record is meant to report.
+  CU_REMAINING=$OW_LIST
+  if [ "$CU_ACTION" != none ] && [ -z "$CU_DRY" ]; then
+    _c_fetch=${SV_DO_FETCH:-}
+    SV_DO_FETCH=
+    owed_record "$@" >/dev/null
+    SV_DO_FETCH=$_c_fetch
+    CU_REMAINING=$OW_LIST
+  fi
+  printf 'name=%s action=%s result=%s from=%s to=%s' "$(_sv_esc "$1")" \
+    "$CU_ACTION" "$CU_RESULT" "$(_sv_short "$CU_FROM")" \
+    "$(_sv_short "$CU_TO")"
+  printf ' owed=%s remaining=%s path=%s\n' "$CU_OWED" "$CU_REMAINING" \
+    "$(_sv_esc "$2")"
+}
+
+# _cu_render <porcelain|table>: exits 1 unless every repo ends owing
+# nothing AND every action it took succeeded (or was a dry run).
+_cu_render() {
+  awk -v mode="$1" '
+    {
+      split("", f)
+      for (i = 1; i <= NF; i++) {
+        k = $i; sub(/=.*/, "", k)
+        v = $i; sub(/^[^=]*=/, "", v)
+        f[k] = v
+      }
+      if (!("remaining" in f) || !("name" in f)) {
+        print "muster: malformed record: " $0 > "/dev/stderr"
+        bad = 1
+        next
+      }
+      if (f["remaining"] != "nothing") bad = 1
+      if (f["result"] != "-" && f["result"] != "ok" &&
+          f["result"] != "dry-run") bad = 1
+      if (mode == "porcelain") { print; next }
+      n++
+      nm[n] = f["name"]; ac[n] = f["action"]; rs[n] = f["result"]
+      fr[n] = f["from"]; to[n] = f["to"]; rm[n] = f["remaining"]
+      if (length(nm[n]) > wn) wn = length(nm[n])
+    }
+    END {
+      if (mode == "table" && n > 0) {
+        if (wn < 4) wn = 4
+        fmt = "%-" wn "s  %-6s  %-17s  %-12s  %-12s  %s\n"
+        printf fmt, "REPO", "ACTION", "RESULT", "FROM", "TO", "REMAINING"
+        for (i = 1; i <= n; i++)
+          printf fmt, nm[i], ac[i], rs[i], fr[i], to[i], rm[i]
+      }
+      exit bad + 0
+    }'
+}
+
+catchup_main() {
+  SV_MODE=table CU_DRY=
+  # shellcheck disable=SC2034  # SV_DO_FETCH is read by survey_lib
+  SV_DO_FETCH=1
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --porcelain) SV_MODE=porcelain ;;
+      --dry-run) CU_DRY=1 ;;
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster catch-up: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  survey_setup "$@" || return 2
+  _ow_canon_load
+  _m_out=$(SV_RECORD_FN=catchup_record survey_records "$@") \
+    || { echo "muster: catch-up itself failed" >&2; return 2; }
+  [ -n "$_m_out" ] \
+    || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  printf '%s\n' "$_m_out" | _cu_render "$SV_MODE"
+}
