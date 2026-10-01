@@ -230,6 +230,45 @@ expect_rc 0 "a stale lock"
 assert "stale lock: says it took over" has "$ERR" "stale lock"
 assert "stale lock: released after" test ! -e "$S/p/lock"
 
+# === one muster run at a time on a box ======================================
+# Found live: two profiles' timers fired in the same second, and a
+# catch-up pulled the canonical mid-way through an observer's run.
+printf 'profile solo owed 1h\nrepo one\n' > "$C/solo"
+BOX=$S/.box-lock
+sleep 60 &
+_holder=$!
+mkdir "$BOX"
+echo "$_holder" > "$BOX/pid"
+_t0=$(date +%s)
+MUSTER_CONFIG=$C/solo MUSTER_RUN_WAIT=2 cli run solo
+_t1=$(date +%s)
+expect_rc 2 "a box held past the wait: the run does not run"
+assert "it waited, rather than giving up at once" \
+  test $((_t1 - _t0)) -ge 2
+assert "the run that did not run is stored, with its reason" \
+  has "$(cat "$S/solo/latest.err")" "held this box"
+assert "the holder's lock is untouched" \
+  test "$(cat "$BOX/pid")" = "$_holder"
+# The holder finishes while a run waits: the run proceeds.
+( sleep 2; rm -f "$BOX/pid"; rmdir "$BOX" ) &
+MUSTER_CONFIG=$C/solo MUSTER_RUN_WAIT=20 cli run solo
+expect_rc 0 "a run that waited for the box, then ran"
+assert "and released the box after" test ! -e "$BOX"
+kill "$_holder" 2>/dev/null
+wait "$_holder" 2>/dev/null
+# A holder that died: its lock is taken over.
+sh -c 'exit 0' &
+_gone=$!
+wait "$_gone"
+mkdir "$BOX"
+echo "$_gone" > "$BOX/pid"
+# Bounded wait: if the takeover ever broke, this fails in seconds rather
+# than hanging the suite for the default ten minutes.
+MUSTER_CONFIG=$C/solo MUSTER_RUN_WAIT=5 cli run solo
+expect_rc 0 "a dead holder's box lock"
+assert "says it took over" has "$ERR" "stale box lock"
+assert "and released it after" test ! -e "$BOX"
+
 # === notify: the fleet's flag/clear protocol, as STATE =======================
 # The stub speaks intervention-required's interface and logs each call.
 N_LOG=$_T/notified

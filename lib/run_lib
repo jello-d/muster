@@ -151,6 +151,31 @@ _rn_lock() {
 
 _rn_unlock() { rm -f "$1/lock/pid"; rmdir "$1/lock" 2>/dev/null || :; }
 
+# _rn_box_lock <dir>: ONE MUSTER RUN AT A TIME ON A BOX, waiting up to
+# $MUSTER_RUN_WAIT seconds (default 600) for it. Found live: an hourly
+# observing profile and a 15-minute catch-up profile, installed together,
+# fired in the SAME SECOND; the catch-up pulled the canonical's repo while
+# the observer was mid-run, so its copies were judged against one state
+# and its row read another, and the report showed "unknown" with no row
+# saying why. Runs take seconds, so waiting is cheap, and a mixed snapshot
+# is not. Fails (1) when the wait runs out; a lock whose holder is dead
+# is taken over. A holder that has not written its pid yet is waited for.
+_rn_box_lock() {
+  _b_wait=${MUSTER_RUN_WAIT:-600}
+  _b_t=0
+  while ! mkdir "$1" 2>/dev/null; do
+    _b_pid=$(cat "$1/pid" 2>/dev/null) || _b_pid=
+    if [ -n "$_b_pid" ] && ! kill -0 "$_b_pid" 2>/dev/null; then
+      echo "muster: taking over a stale box lock (pid $_b_pid)" >&2
+      break
+    fi
+    [ "$_b_t" -lt "$_b_wait" ] || return 1
+    sleep 1
+    _b_t=$((_b_t + 1))
+  done
+  echo $$ > "$1/pid"
+}
+
 # _rn_flagged <verb> <records-file>: "<name> <verdict>" for each row that
 # fails the run, sorted. Only the verdict, never a timestamp, so two runs
 # compare equal unless something actually CHANGED. The rows are chosen by
@@ -291,6 +316,37 @@ _rn_invoke() {
   "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
 }
 
+# _rn_run_locked <profile> <dir> <tmp>: the verb, under the box lock,
+# into <tmp>.records / .err; returns the verb's exit, or 2 when the box
+# lock could not be had (stored as a run that did not run).
+_rn_run_locked() {
+  _q_box=$(_rn_state_dir)/.box-lock
+  case $_q_box in
+    *\'*) echo "muster: unusable state dir [$_q_box]" >&2; return 2 ;;
+  esac
+  if ! _rn_box_lock "$_q_box"; then
+    : > "$3.records"
+    printf '%s %s\n' "muster: another muster run held this box for" \
+      "${MUSTER_RUN_WAIT:-600}s; this run did not run" > "$3.err"
+    return 2
+  fi
+  # Holding it now, so the cleanup may release it; armed only once held,
+  # or an interrupted waiter would delete another run's lock.
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$3.records' '$3.err' '$3.meta' '$2/lock/pid' \
+    '$_q_box/pid'; rmdir '$2/lock' '$_q_box' 2>/dev/null" EXIT
+  _q_rc=0
+  _rn_invoke "$1" >"$3.records" 2>"$3.err" </dev/null || _q_rc=$?
+  # Released: disarm the box paths FIRST, so an interruption from here on
+  # cannot remove a lock another run has taken in the meantime.
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$3.records' '$3.err' '$3.meta' '$2/lock/pid'; \
+    rmdir '$2/lock' 2>/dev/null" EXIT
+  rm -f "$_q_box/pid"
+  rmdir "$_q_box" 2>/dev/null || :
+  return "$_q_rc"
+}
+
 # run_main <profile>: run it, store it, notify on change; exit as the verb.
 run_main() {
   [ "$#" = 1 ] && [ -n "$1" ] \
@@ -323,7 +379,7 @@ run_main() {
     '$_m_dir/lock/pid'; rmdir '$_m_dir/lock' 2>/dev/null" EXIT
   _m_start=$(date +%s)
   _m_rc=0
-  _rn_invoke "$1" >"$_m_tmp.records" 2>"$_m_tmp.err" </dev/null || _m_rc=$?
+  _rn_run_locked "$1" "$_m_dir" "$_m_tmp" || _m_rc=$?
   printf 'profile=%s\nverb=%s\ninterval=%s\ndriver=%s\n' \
     "$1" "$RN_VERB" "$RN_EVERY" "$RN_DRIVER" >"$_m_tmp.meta"
   printf 'started=%s\nfinished=%s\n' "$_m_start" "$(date +%s)" \

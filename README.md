@@ -208,9 +208,13 @@ catch-up.
 a meta file (`profile verb interval started finished exit host`) under
 `$MUSTER_STATE_DIR` (default `~/.local/state/muster/<profile>/`): a
 `latest.*` set swapped in whole, and a history pruned to `$MUSTER_KEEP`
-(default 48). A lock keeps a timer and a manual run of one profile from
-overlapping; a lock left by a dead process is taken over. The verb's
-exit passes through.
+(default 48). ONE RUN AT A TIME ON A BOX: `run` waits for a box-wide
+lock (up to `$MUSTER_RUN_WAIT` seconds, default 600), because profiles
+installed together fire together, and a catch-up pulling a repo while
+another profile is reading it yields a report about two different
+moments. A wait that runs out is stored as a run that did not run; a
+lock left by a dead process is taken over. The verb's exit passes
+through.
 
 `muster report` shows every profile's latest run: its age, and a status
 of `ok`, `attention`, `failed`, `never` (no stored run) or `stale` (older
