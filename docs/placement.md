@@ -84,7 +84,11 @@ MUST BE TRUE: comparing the three versions yields exactly one of:
     in sync      source = baseline = live
     place        source changed, live = baseline: overwrite live, safe
     merge back   live changed, source = baseline: fold live into source
-    conflict     both changed, differently: a human decides
+                 (user-editable only; P10)
+    displace     live changed on a REPO-OWNED file (whether or not the
+                 source did): move the live edit aside, then place (P4)
+    conflict     both changed, differently, on a user-editable file: a
+                 human decides
     converged    both changed, identically: record the baseline only
     new          in source, never placed: place it
     orphan       gone from source, still placed (see P8)
@@ -99,14 +103,40 @@ WHY: the four cases chezmoi could not tell apart are the four that need
 different remedies, and a check that blurs a fault into drift is the
 "apply did not fix" loop the integrator has paid for more than once.
 
-### P4. No edit is ever lost, on either side
+### P4. No edit is ever lost, on either side, under any policy
 
-MUST BE TRUE: placing never overwrites a live file that differs from its
-baseline; merging back never overwrites a source file that differs from
-its baseline. Either case is a conflict, and a conflict touches nothing.
+MUST BE TRUE: no write by muster ever destroys content that exists
+nowhere else. The guarantee holds for every policy; what the policy
+decides (P10) is only whether muster may MOVE an edit out of the way:
+
+- USER-EDITABLE: placing never overwrites a live file that differs from
+  its baseline. That is a conflict, and a conflict touches nothing.
+- REPO-OWNED: placing may overwrite a live edit, but only by DISPLACING
+  it first: the live content and mode are copied to the displaced store
+  (below), the copy is verified byte for byte, and only then is the live
+  file replaced. If the copy cannot be made or verified, nothing is
+  overwritten, and that is a fault. Naming an overwritten edit is not
+  enough: named but gone is still lost.
+- APP-OWNED: placing never overwrites (it only seeds what is absent), so
+  nothing is ever displaced.
+- MERGING BACK never overwrites a source file that differs from its
+  baseline, for any policy: that is a conflict.
+
+THE DISPLACED STORE mirrors the baseline's layout:
+`<state>/displaced/<UTC time>/<absolute destination path>`, content and
+mode as they were. It is never pruned automatically. Every displacement
+is reported where it happens, and until someone reviews and clears it,
+`check` reports each entry as a FAULT (exit 3): clearing it is a person's
+decision, and no apply can make it, which is exactly what muster's
+contract says a fault is. A live edit to a repo-owned file is something a
+person did, and a person should see it.
 
 WHY: this is the guarantee the symlink gave for free, and the one the
-migration must not regress. chezmoi failed it on the source side.
+migration must not regress. chezmoi failed it on the source side. An
+earlier draft of these requirements contradicted itself here (P4 said
+never overwrite, P10 said repo-owned overwrites "and says so"); review
+caught it, and "says so" now means PRESERVED AND RECOVERABLE, not merely
+named.
 
 AND THE BASELINE MOVES ONLY AFTER A VERIFIED WRITE: a place updates the
 baseline only once the live file is proven to hold what was intended; a
@@ -152,7 +182,9 @@ MUST BE TRUE:
 
 - Removed from the source, live = baseline: remove the live file and its
   baseline. The source change (a commit) IS the recorded intent.
-- Removed from the source, live edited: a conflict; touch nothing.
+- Removed from the source, live edited: on a user-editable file a
+  conflict, touching nothing; on a repo-owned file, displace the edit
+  (P4), then remove.
 - Removed live, still in the source: NOT intent. It is placed again on
   the next run, and that is reported.
 - A source tree that is missing, empty or unreadable is a FAULT, and
@@ -185,8 +217,8 @@ layer supplied the file, but not built until a layer is in use.
 MUST BE TRUE:
 
     user-editable  full three-way handling, merge-back offered (P3-P6)
-    repo-owned     place overwrites a live edit, AND SAYS SO: the edit is
-                   reported, never silently replaced
+    repo-owned     place overwrites a live edit only by DISPLACING it
+                   first (P4): preserved, verified, reported, recoverable
     app-owned      the application rewrites the file itself: place only
                    when absent (seed), and capture back only explicitly
 
