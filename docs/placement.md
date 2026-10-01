@@ -131,6 +131,16 @@ decision, and no apply can make it, which is exactly what muster's
 contract says a fault is. A live edit to a repo-owned file is something a
 person did, and a person should see it.
 
+A STEADY STREAM OF DISPLACEMENTS MEANS A FILE IS MISCLASSIFIED, never
+that the tool is noisy: a file an application rewrites is app-owned
+(never overwritten), and one a person edits on purpose is user-editable
+(merged back), so a correctly classified repo-owned file is not edited
+live and its store stays empty. The remedy for recurring faults is a
+per-file override (P10), not a quieter overwrite. This is deliberately
+more conservative than "repo-owned is simply overwritten", which is how
+the policy was first described: blind overwrite would hide exactly the
+signal that a classification is wrong.
+
 WHY: this is the guarantee the symlink gave for free, and the one the
 migration must not regress. chezmoi failed it on the source side. An
 earlier draft of these requirements contradicted itself here (P4 said
