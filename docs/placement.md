@@ -223,6 +223,12 @@ MUST BE TRUE:
   (P4), then remove.
 - Removed live, still in the source: NOT intent. It is placed again on
   the next run, and that is reported.
+- Removed from BOTH sides (a captured file someone decides against):
+  only the baseline remains, read as `orphan`, drift, until the next
+  `place` clears it. So retiring such a file is: remove it from the
+  source, remove it live, then `place`; without the last step check stays
+  at exit 1 with nothing visible left to fix. Removing it live alone
+  brings it back, byte-identical: retiring is a commit to the source.
 - A source tree that is missing, empty or unreadable is a FAULT, and
   nothing is deleted: never "everything was removed".
 
