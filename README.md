@@ -54,13 +54,18 @@ Diagnose with nothing, repair with tools.
 
 ## Install
 
-    ./setup.sh install      link bin/muster into ~/.local/bin
-    ./setup.sh check        installed, on PATH, not shadowed, and it runs
-    ./setup.sh uninstall    remove the link, only if it is this tree's
+    ./setup.sh install      copy bin/ and lib/ into ~/.local/share/muster,
+                            link ~/.local/bin/muster into that copy
+    ./setup.sh check        the copy matches this tree, on PATH, not
+                            shadowed, nothing links into this tree, runs
+    ./setup.sh uninstall    remove the link and the copy, if they are ours
+    ./setup.sh paths        where the command, payload, config, state live
 
-Only the command is linked; it finds `lib/` beside itself through the
-link, so there is nothing else to place. This is the package contract
-tackup installs through.
+The installed copy (the payload) is built beside the live one, proven to
+run, then swapped in whole, so the install outlives the tree it came
+from and never changes under a running muster. The command finds `lib/`
+beside itself through the link. This is the package contract tackup
+installs through.
 
 ## Usage
 
