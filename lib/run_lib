@@ -437,6 +437,34 @@ _rn_intent_since() {
   esac
 }
 
+# _rn_timer_alive <profile> <interval>: does SYSTEMD say it is still
+# running this profile? Its timer's next firing is in the future and no
+# more than one interval (plus a minute) away, AND the service's last
+# result was success. Asked only when the wall clock says a run is
+# overdue, because the two clocks differ across a SUSPEND: a timer counts
+# awake time only, so after a night asleep every run looked "older than
+# twice its interval" while the timers were healthy and due within the
+# hour (measured by the integrator; this read as a fault most mornings).
+# A timer that has stopped (no next firing, or one in the past: a hung
+# run) is not alive, and nor is one firing a service that fails before
+# muster can store anything (a missing binary): both stay loud. Any
+# answer systemd cannot give (too old for JSON, no user manager) is "not
+# alive", so the wall-clock verdict stands.
+_rn_timer_alive() {
+  _a_max=$(_rn_seconds "$2") || return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  _a_next=$(systemctl --user list-timers --all --output=json \
+    "muster-$1.timer" 2>/dev/null | awk -v u="\"unit\":\"muster-$1.timer\"" '
+    BEGIN { RS = "}" }
+    index($0, u) && match($0, /"next":[0-9]+/) {
+      print substr($0, RSTART + 7, RLENGTH - 7); exit }')
+  case $_a_next in ''|*[!0-9]*) return 1 ;; esac
+  _a_left=$(( _a_next / 1000000 - $(date +%s) ))
+  [ "$_a_left" -gt 0 ] && [ "$_a_left" -le $(( _a_max + 60 )) ] || return 1
+  [ "$(systemctl --user show -p Result --value "muster-$1.service" \
+    2>/dev/null)" = success ]
+}
+
 # _rn_status <name> <verb> <interval> <driver>: one porcelain line.
 #   ok / attention / failed   the last run's exit: 0, 1, anything else
 #   stale       driven, and the last run is older than twice the interval:
@@ -458,6 +486,8 @@ _rn_status() {
     if [ "$4" = manual ]; then _t_st=on-demand
     elif _t_since=$(_rn_intent_since "$1" "$4") \
       && [ $(( _t_now - _t_since )) -le "$_t_max" ]; then _t_st=pending
+    elif [ "$4" = systemd ] && _rn_timer_alive "$1" "$3"; then
+      _t_st=pending
     else _t_st=never
     fi
   else
@@ -467,7 +497,8 @@ _rn_status() {
       1) _t_st=attention ;;
       *) _t_st=failed ;;
     esac
-    if [ "$4" != manual ] && [ $(( _t_now - _t_fin )) -gt "$_t_max" ]; then
+    if [ "$4" != manual ] && [ $(( _t_now - _t_fin )) -gt "$_t_max" ] \
+      && ! { [ "$4" = systemd ] && _rn_timer_alive "$1" "$3"; }; then
       _t_st=stale
     fi
   fi

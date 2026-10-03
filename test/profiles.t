@@ -9,6 +9,9 @@ set -u
 H_NAME=profiles
 # shellcheck source=SCRIPTDIR/harness_lib
 . "$(dirname -- "$0")/harness_lib"
+# A stubbed systemctl: report asks systemd about driven profiles' timers,
+# and a test must never read, let alone depend on, the real user manager.
+h_stub_systemctl
 
 export MUSTER_STATE_DIR="$_T/state"
 C=$_T/cfg

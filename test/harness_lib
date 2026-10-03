@@ -145,6 +145,11 @@ case \$cmd in
   disable) rm -f "$H_SYS/enabled.\$1" "$H_SYS/active.\$1" ;;
   is-enabled) [ -e "$H_SYS/enabled.\$1" ] ;;
   is-active) [ -e "$H_SYS/active.\$1" ] ;;
+  # What a test PLANTS: list-timers prints timers.json, verbatim (none:
+  # an empty list); show prints result.<unit> (none: success).
+  list-timers) cat "$H_SYS/timers.json" 2>/dev/null || echo '[]' ;;
+  show) for _a; do _u=\$_a; done
+        cat "$H_SYS/result.\$_u" 2>/dev/null || echo success ;;
   *) exit 9 ;;
 esac
 STUB

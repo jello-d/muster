@@ -223,7 +223,11 @@ through.
 
 `muster report` shows every profile's latest run: its age, and a status
 of `ok`, `attention`, `failed`, `never` (no stored run) or `stale` (older
-than twice its interval, so whatever should run it has stopped). Below
+than twice its interval, so whatever should run it has stopped). For a
+systemd-driven profile an old run is NOT stale while systemd itself has
+the timer due within one interval and the service's last result was
+success: timers count awake time only, so after a suspend the wall clock
+runs ahead of them by exactly the sleep. Below
 that, each profile's rows that need attention, drawn by the verb's own
 renderer. Exit 0 only when every profile is `ok`.
 

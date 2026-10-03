@@ -129,6 +129,35 @@ rm -f "$_T/state/a/latest.meta.bak"
 ck 'driver systemd' 'profile a owed 1h alpha'
 expect_rc 3 "a driven profile whose runs stopped: a FAULT"
 assert "stale named" has "$OUT" "fault  stale      a:"
+# ...UNLESS SYSTEMD SAYS THE DRIVER IS ALIVE. After a suspend the wall
+# clock runs ahead of the timers (they count awake time only), so an old
+# run beside a timer due within its interval is a sleep, not a stop.
+_tj() {   # <next, seconds from now>: plant the timer list systemd reports
+  printf '[{"next":%s000000,"left":0,"last":0,"passed":0,' \
+    "$(( $(date +%s) + $1 ))" > "$H_SYS/timers.json"
+  printf '"unit":"muster-a.timer","activates":"muster-a.service"}]\n' \
+    >> "$H_SYS/timers.json"
+}
+_tj 1800
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 0 "after a suspend: old run, timer due within the hour, no fault"
+assert "after a suspend: not called stale" \
+  test -z "$(printf '%s\n' "$OUT" | grep 'fault  stale')"
+_tj -60
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "a timer whose next firing is PAST (a hung run): still stale"
+_tj 10800
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "a timer due further off than its interval: still stale"
+_tj 1800
+echo exit-code > "$H_SYS/result.muster-a.service"
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "a live timer firing a FAILING service: still stale"
+rm -f "$H_SYS/result.muster-a.service"
+printf '[]\n' > "$H_SYS/timers.json"
+ck 'driver systemd' 'profile a owed 1h alpha'
+expect_rc 3 "systemd reports no such timer: still stale"
+rm -f "$H_SYS/timers.json"
 # Never run although the intent is old: never.
 rm -f "$_T/state/a/latest.meta" "$_T/state/a/latest.records" \
   "$_T/state/a/latest.err"
@@ -137,6 +166,10 @@ touch -t 200001010000 "$HOME/.config/systemd/user/muster-a.timer" \
 OUT=$("$MUSTER" check 2>/dev/null); RC=$?
 expect_rc 3 "an old intent that has never run"
 assert "never named" has "$OUT" "fault  never      a:"
+_tj 1800
+OUT=$("$MUSTER" check 2>/dev/null); RC=$?
+expect_rc 0 "never run, but systemd has it due within the hour: pending"
+rm -f "$H_SYS/timers.json"
 "$MUSTER" run a >/dev/null 2>&1
 ck 'driver systemd' 'profile a owed - alpha'
 expect_rc 3 "systemd with no interval: nothing to judge runs against"
