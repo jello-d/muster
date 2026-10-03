@@ -89,15 +89,22 @@ commands:
          run a declared profile and store its records under
          ~/.local/state/muster/<profile>; what timers call
   report [--porcelain]
-         every profile's latest stored run: age, status, and the rows
+         every profile's latest STORED run: age, status, and the rows
          that need attention. A run older than twice its interval is
-         stale, and one that never happened says never
+         stale, and one that never happened says never. Instant, no
+         network; a fix made by hand shows only after the next run
+         (muster run <profile>, or resolve, which re-runs them all)
   schedule install|check|remove
          systemd user timers for the profiles: install makes them match,
          check reports drift (exit 1), remove takes muster's units away
-  check  is the declared policy coherent on this box? expands every
-         profile's selectors: overlapping acting profiles, literal names
-         that are not repos here, profiles that select nothing
+  check  is muster itself healthy on this box, judged against what was
+         declared? The profiles (overlaps, repos missing here, empty
+         selections), whether their runs are happening (stale, never,
+         failed), the timers against each profile's driver, the
+         notifier, and placed config: what place repairs is drift (exit
+         1); what needs a person (merge-back, capture, conflict,
+         displaced, a link it will not touch) is a fault (exit 3).
+         Not whether repos need attention: that is report and resolve
   stamp  [--fetch] [name...]
          record the set as it stands (HEAD, the uncommitted tree, the
          upstream head) on stdout: take one before a long verification
@@ -124,7 +131,8 @@ commands:
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
-      something needs attention, 2 could not run
+      something needs attention, 2 could not run; check adds 3, a fault
+      that needs a person (and outranks 1)
 EOF
 }
 
