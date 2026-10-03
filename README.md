@@ -341,15 +341,19 @@ on THIS box, judged against what was DECLARED? It runs no verb. It lists
 each profile with its driver and its repos, then every finding, tagged
 by the remedy it wants:
 
-    drift   `muster schedule install` repairs it: a unit missing,
-            differing, disabled, inactive, an orphan, or `unwanted`
-            (present for a profile not driven by systemd)
+    drift   an apply repairs it: a unit missing, differing, disabled,
+            inactive, an orphan, or `unwanted` (present for a profile
+            not driven by systemd), which `muster schedule install`
+            fixes; or placed config `muster place` would update
     fault   no install repairs it: overlapping acting profiles, a
             literal selector that is not a repo here, an empty
             selection, an incoherent profile (an interval nothing will
             honour, or a driven profile with none), systemd wanted and
-            absent, or runs the intent promises that are not happening:
-            `stale`, `never`, `failed`
+            absent, a notifier that is not an absolute executable path,
+            runs the intent promises that are not happening (`stale`,
+            `never`, `failed`), or placed config needing a person
+            (`merge-back`, `capture`, `conflict`, a displaced edit, a
+            `source-link`, a link it will not touch)
     note    shown, never counted: a pattern matching nothing here, an
             undeclared driver
 
@@ -358,7 +362,11 @@ drift), **2** an invalid config. An integrator maps 1 to its apply and 3
 to a fault, so its check never reports as repairable what its apply
 cannot repair. A run is not overdue until the intent is twice the
 interval old (dated from the timer, or before one exists from the
-config), so writing the config, installing and checking converges.
+config), so writing the config, installing and checking converges. For
+a systemd-driven profile an old run is not a fault while systemd has
+its timer due within one interval and the service last succeeded: the
+timers count awake time only, so after a suspend the wall clock runs
+ahead of them by the sleep.
 Whether repos need ATTENTION is not judged here: that is the fleet's
 state, which `report` and the notifier carry.
 
@@ -526,22 +534,31 @@ skipped line.
 
 ## Status
 
-PLACEMENT BUILT through increment 2: leaf files, whole-directory links
-(migrated), and capture directories; requirements in
-`docs/placement.md`. Not yet: `~/bin`, overlay layers, the three-way
-merge (P6).
+Every verb above is implemented: `survey`, `owed`, `catch-up`,
+`resolve`, `push`, `run`, `report`, `schedule`, `check`, `stamp`, and
+placement (`placed`, `place`, `merge-back`, `capture`, `where`,
+`displaced`). Requirements R1 to R11 are met (`docs/requirements.md`),
+and placement P1 to P13 (`docs/placement.md`) through whole-directory
+links, destination roots that are themselves links, and capture
+directories.
 
-`survey`, `owed`, `catch-up`, `run`, `report`, `schedule`, `check` and
-`stamp` are implemented: requirements R1 to R11, except that re-seeding
-a vendored file (owed's `reseed`) is reported and not acted on, having
-been needed zero times. Re-seeding vendored
-files (owed's `reseed`) is not: it has been needed zero times so far,
-and copier was verified by hand and set aside (see
-`docs/requirements.md`). Running catch-up on a schedule is the
-integrator's decision.
+Deliberately not built, each needed zero times so far: re-seeding a
+vendored file (owed reports `reseed` and leaves it to the integrator;
+copier was verified by hand and set aside, see `docs/requirements.md`),
+the three-way merge of a placement conflict (P6), and overlay layers.
+Running anything on a schedule, and what a schedule may do, is the
+integrator's decision; no profile verb pushes.
+
+PLATFORM: Linux. POSIX sh (developed under dash), git, and the usual
+coreutils, including `readlink -f`; systemd only for `schedule`. Not
+tested on BSD or macOS.
 
 `test/run` runs the suite: the vendored conventions check, shellcheck,
-and `test/survey.t`, `owed.t`, `catchup.t`, `profiles.t` and
-`schedule.t`, which build real git repositories in a scratch directory
-rather than stubbing git. Only systemctl is stubbed, and the unit
-directory is proven to be inside the scratch directory first.
+and one behavioural file per area (`survey.t`, `owed.t`, `catchup.t`,
+`resolve.t`, `push.t`, `profiles.t`, `schedule.t`, `check.t`,
+`stamp.t`, `place.t`, `setup.t`). They build real git repositories in a
+scratch directory rather than stubbing git. The few stubs are each
+there to reach a state a real tool will not produce on demand: a
+systemctl (the real user manager is never asked, and the unit directory
+is proven to be inside scratch first), a `cp` that corrupts a copy, and
+a `git` whose push reports success and sends nothing.
