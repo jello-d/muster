@@ -1,0 +1,208 @@
+# shellcheck shell=sh
+# push_lib - `muster push`: a batch push across the set, made SAFE to the
+# point where seeing what goes out is part of the command.
+#
+# Sourced by bin/muster, never executed. Agreed with the user 2026-10-03.
+# Push was the one owed verdict with no muster verb, so the playbook ended
+# in "go to each repo". Its risk is the reason resolve never pushes: an
+# unpushed commit may be ANOTHER SESSION'S work in progress. So:
+#
+#   muster push                 LISTS only: each repo that owes a push,
+#                               its commits (subject, age), a dirty tree
+#                               flagged. Publishing needs an explicit act
+#   muster push --all|name...   pushes them
+#   muster resolve --push       the same, after catch-up; the flag every
+#                               time, never a config default, and no
+#                               profile verb, so no timer ever pushes
+#
+# WHAT GOES: only a repo owed exactly a push after a fresh fetch (ahead,
+# not behind, nothing to escalate), and only THE COMMIT THAT WAS LISTED:
+# `git push <remote> <sha>:<upstream-ref>`, so a commit made between the
+# listing and the push is not published unseen, and an explicit refspec
+# means no `push.default=matching` can push other branches. Never
+# --force, never tags (--no-follow-tags), never another branch, never an
+# upstream set up for a repo without one. A dirty tree is pushable (push
+# sends commits, not the tree) and is flagged in the listing.
+#
+# VERIFIED: the remote-tracking ref must equal the pushed commit after,
+# the check every catch-up write gets. A failed push (a locked keyring, a
+# hook) is reported and never retried.
+#
+# Exit: 0 nothing owed a push (or everything named went out), 1 something
+# still owes one or was refused, 2 a push failed or could not run.
+
+# _pu_candidates <owed-records>: the repos owed exactly a push, one
+# "<esc-name> <esc-path>" a line.
+_pu_candidates() {
+  printf '%s\n' "$1" | while IFS= read -r _c_rec; do
+    [ -n "$_c_rec" ] || continue
+    case ,$(_st_field "$_c_rec" owed), in
+      *,push,*) case ,$(_st_field "$_c_rec" owed), in
+          *,rebase,*|*,escalate,*|*,skip,*|*,pull,*) ;;
+          *) printf '%s %s\n' "$(_st_field "$_c_rec" name)" \
+               "$(_st_field "$_c_rec" path)" ;;
+        esac ;;
+    esac
+  done
+}
+
+# _pu_refusals <owed-records>: one line for each repo that is ahead but
+# may not be pushed, and why. Behind or diverged is catch-up's (or a
+# person's) to settle first.
+_pu_refusals() {
+  printf '%s\n' "$1" | while IFS= read -r _r_rec; do
+    [ -n "$_r_rec" ] || continue
+    _r_o=$(_st_field "$_r_rec" owed)
+    case ,$_r_o, in
+      *,push,*) case ,$_r_o, in
+          *,rebase,*|*,escalate,*|*,skip,*|*,pull,*)
+            printf 'refused    %s: ahead AND behind (owed %s); settle that' \
+              "$(_st_unesc "$(_st_field "$_r_rec" name)")" "$_r_o"
+            printf ' first: muster resolve\n' ;;
+        esac ;;
+    esac
+  done
+}
+
+# _pu_show <name> <path> [<rev>]: the listing for one repo: the commits
+# up to <rev> (HEAD by default), newest first, each with its age, and a
+# dirty tree said out loud.
+_pu_show() {
+  _s_r=${3:-HEAD}
+  _s_n=$(git -C "$2" rev-list --count "@{upstream}..$_s_r" 2>/dev/null) \
+    || _s_n='?'
+  printf '%-10s %s: %s commit(s)' push "$1" "$_s_n"
+  if [ -n "$(git -C "$2" status --porcelain --untracked-files=normal \
+      2>/dev/null)" ]; then
+    printf ', and uncommitted work here (maybe a session in progress)'
+  fi
+  printf '\n'
+  git -C "$2" log --format='           %h  %<(14)%ar  %s' \
+    "@{upstream}..$_s_r" 2>/dev/null
+}
+
+# _pu_one <name> <path> <sha>: push exactly <sha> to the upstream, and
+# prove it landed. Prints one line; returns 1 on any failure.
+_pu_one() {
+  _o_b=$(git -C "$2" symbolic-ref -q --short HEAD) \
+    || { printf 'FAILED     %s: detached HEAD\n' "$1"; return 1; }
+  _o_rem=$(git -C "$2" config --get "branch.$_o_b.remote") \
+    && _o_ref=$(git -C "$2" config --get "branch.$_o_b.merge") \
+    && [ "$_o_rem" != . ] \
+    || { printf 'FAILED     %s: no upstream to push to\n' "$1"; return 1; }
+  _o_was=$(git -C "$2" rev-parse -q --verify '@{upstream}') || _o_was=
+  if ! git -C "$2" merge-base --is-ancestor "$_o_was" "$3" 2>/dev/null; then
+    printf 'FAILED     %s: no longer a fast-forward; not pushed\n' "$1"
+    return 1
+  fi
+  _o_to=
+  command -v timeout >/dev/null 2>&1 \
+    && _o_to="timeout ${MUSTER_FETCH_TIMEOUT:-60}"
+  # shellcheck disable=SC2086  # $_o_to is empty or two words
+  if ! _o_err=$(GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
+      $_o_to git -C "$2" push --quiet --no-follow-tags "$_o_rem" \
+      "$3:$_o_ref" 2>&1 </dev/null); then
+    printf 'FAILED     %s: %s\n' "$1" \
+      "$(printf '%s' "$_o_err" | tail -n 1)"
+    return 1
+  fi
+  if [ "$(git -C "$2" rev-parse -q --verify '@{upstream}')" != "$3" ]; then
+    printf 'FAILED     %s: pushed, but %s does not read %s after\n' "$1" \
+      "$_o_rem" "$(printf '%.12s' "$3")"
+    return 1
+  fi
+  printf '%-10s %s  %.12s..%.12s\n' pushed "$1" "$_o_was" "$3"
+}
+
+# _pu_act <candidates>: push each, the commit listed for it.
+_pu_act() {
+  printf '%s\n' "$1" | {
+    _a_bad=0
+    while read -r _a_en _a_ep; do
+      [ -n "$_a_en" ] || continue
+      _a_n=$(_st_unesc "$_a_en") _a_p=$(_st_unesc "$_a_ep")
+      # The commit is fixed FIRST: what is shown is exactly what goes.
+      _a_sha=$(git -C "$_a_p" rev-parse -q --verify HEAD) || _a_sha=
+      _pu_show "$_a_n" "$_a_p" "$_a_sha" | tail -n +2
+      _pu_one "$_a_n" "$_a_p" "$_a_sha" || _a_bad=1
+    done
+    exit "$_a_bad"
+  }
+}
+
+# _pu_locked <cmd...>: run it holding the box lock: push acts, so a timer
+# must not act on the same repos mid-way.
+_pu_locked() {
+  _l_box=$(_rn_state_dir)/.box-lock
+  case $_l_box in
+    *\'*) echo "muster: unusable state dir [$_l_box]" >&2; return 2 ;;
+  esac
+  mkdir -p "$(_rn_state_dir)" || return 2
+  if ! _rn_box_lock "$_l_box"; then
+    echo "muster: another muster run held this box for" \
+      "${MUSTER_RUN_WAIT:-600}s; push did not run" >&2
+    return 2
+  fi
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$_l_box/pid'; rmdir '$_l_box' 2>/dev/null" EXIT
+  _l_rc=0
+  "$@" || _l_rc=$?
+  rm -f "$_l_box/pid"
+  rmdir "$_l_box" 2>/dev/null || :
+  trap - EXIT
+  return "$_l_rc"
+}
+
+# _pu_run <act?> [name...]: judge (fetching), list or push, refuse aloud.
+_pu_run() {
+  _u_act=$1; shift
+  _u_rc=0
+  _u_rec=$("$MUSTER_BIN" owed --porcelain -- "$@" </dev/null) || _u_rc=$?
+  [ "$_u_rc" -lt 2 ] || { echo "muster: owed could not run" >&2; return 2; }
+  _u_cand=$(_pu_candidates "$_u_rec")
+  _u_ref=$(_pu_refusals "$_u_rec")
+  [ -z "$_u_ref" ] || printf '%s\n' "$_u_ref"
+  if [ -z "$_u_cand" ]; then
+    echo "nothing to push"
+    [ -z "$_u_ref" ] || return 1
+    return 0
+  fi
+  if [ -z "$_u_act" ]; then
+    printf '%s\n' "$_u_cand" | while read -r _u_en _u_ep; do
+      _pu_show "$(_st_unesc "$_u_en")" "$(_st_unesc "$_u_ep")"
+    done
+    echo "to publish: muster push --all, or muster push <name>..."
+    return 1
+  fi
+  _pu_act "$_u_cand" || return 2
+  [ -z "$_u_ref" ] || return 1
+}
+
+push_main() {
+  _m_act='' _m_all='' _m_refresh=1
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --all) _m_all=1 ;;
+      --dry-run) _m_act=dry ;;
+      --no-refresh) _m_refresh='' ;;   # resolve --push refreshes itself
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster push: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  if [ -n "$_m_all" ] && [ "$#" -gt 0 ]; then
+    echo "muster push: --all, or names, not both" >&2; return 2
+  fi
+  survey_config || return 2
+  # Publishing is an explicit act: names or --all, and never a dry run.
+  if [ "$_m_act" = dry ] || { [ -z "$_m_all" ] && [ "$#" = 0 ]; }; then
+    _pu_run '' "$@"; return
+  fi
+  _m_rc=0
+  _pu_locked _pu_run act "$@" || _m_rc=$?
+  if [ -n "$_m_refresh" ]; then _rs_refresh; fi
+  return "$_m_rc"
+}

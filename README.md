@@ -78,6 +78,8 @@ installs through.
     muster catch-up               fast-forward and safe-rebase the set
     muster resolve --dry-run      what resolve would do, and what needs you
     muster resolve                everything safe, then what needs you
+    muster push                   what would be pushed, commit by commit
+    muster push --all             push it (or: muster push mux tackup)
     muster run <profile>          run a profile and store the result
     muster report                 every profile's latest run, in one view
     muster schedule install       systemd user timers for the profiles
@@ -193,12 +195,15 @@ The one command to run when something is red. In order:
 It adds no action of its own: each step is the verb above, so resolve
 cannot drift from them. It holds the box lock while acting, so a timer
 cannot act on the same repos mid-way. It NEVER pushes (an unpushed
-commit may be another session's work), merges by hand, touches a dirty
+commit may be another session's work) unless `--push` is given, every
+time: then `muster push` runs after the catch-up. It never merges by
+hand, touches a dirty
 tree, folds a live edit into the source, decides a conflict or clears a
 displaced edit: those are the list. Exit 0 nothing needs you, 1
 something does, 2 a step could not run.
 
-    push         unpushed commits: review, then git -C <repo> push
+    push         unpushed commits: review (muster push lists them),
+                 then muster push <repo>, or resolve --push
     escalate     both sides changed the same files: merge by hand
     skip         uncommitted work, and behind: commit or stash, resolve
     unknown      could not fetch (locked keyring, no agent): log in,
@@ -222,6 +227,29 @@ after the next run, and until then report names the repos that moved
 and the command to refresh: `muster run <profile>`, or `resolve`.
 `muster check` is the deeper question, whether muster itself is healthy
 here, and is where config faults show without a run.
+
+### push: a batch push that shows what it publishes
+
+    muster push [--dry-run] [--all | name...]
+
+Bare, it only LISTS: each repo owed a push after a fresh fetch, its
+commits newest first with their ages, and a dirty tree flagged ("maybe a
+session in progress"), because an unpushed commit may be another
+session's work. Publishing takes an explicit act: `--all`, or names.
+
+What goes is exactly the commit it listed, `git push <remote>
+<sha>:<upstream>`, so a commit made in between is not published unseen,
+and an explicit refspec means no `push.default=matching` sends other
+branches. Fast-forward only; never `--force`, never tags (even under
+`push.followTags`), never another branch, never an upstream created for
+a repo without one. A repo ahead AND behind is refused (`muster
+resolve` first). Each push is verified by reading the remote-tracking
+ref back; a failure (a locked keyring, a refusing hook) is named and
+never retried. It holds the box lock, then re-runs every profile so
+`report` is current. No profile verb pushes, so no timer ever does.
+
+Exit 0 nothing owed a push (or all of it went), 1 something still owes
+one or was refused, 2 a push failed or could not run.
 
 ### Profiles, run and report
 

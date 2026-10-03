@@ -18,7 +18,10 @@
 #   4. needs you  read FRESH from owed and placed, after acting: what is
 #               left is what is true, never a prediction
 #
-# NEVER: push (an unpushed commit may be another session's work), merge
+# NEVER: push (an unpushed commit may be another session's work) unless
+# `--push` is given, EVERY time (no config default, no profile verb):
+# then `muster push` runs after step 2, outside the box lock it takes
+# itself, and before the refresh, so the list says what went out. Merge
 # by hand, touch a dirty tree, fold a live edit into the source, decide a
 # conflict, clear a displaced edit. Those are the "needs you" list.
 #
@@ -128,8 +131,8 @@ _rs_owed_one() {
       pull|rebase) [ -n "$_o_dry" ] || _rs_need "$_o_v" \
         "$_o_n: still owed after catch-up; see: muster catch-up $_o_n" ;;
       push) _rs_need push "$_o_n: $(_st_field "$_o_r" ahead) unpushed" \
-        "commit(s), maybe someone's work in progress; review, then:" \
-        "git -C $_o_p push" ;;
+        "commit(s), maybe someone's work in progress; review (muster" \
+        "push lists them), then: muster push $_o_n" ;;
       escalate) _rs_need escalate "$_o_n: both sides changed" \
         "$(_st_unesc "$(_st_field "$_o_r" overlap)"); merge by hand in $_o_p" ;;
       skip) _rs_need skip "$_o_n: uncommitted work, and behind" \
@@ -212,6 +215,22 @@ $_p_disp
 DISPLACED
 }
 
+# _rs_push <dry> [name...]: `muster push` for the same set, after the
+# catch-up. A dry run shows push's own listing of what would go.
+_rs_push() {
+  _h_dry=$1; shift
+  printf '\n== push\n'
+  _h_rc=0
+  if [ -n "$_h_dry" ]; then
+    "$MUSTER_BIN" push --dry-run -- "$@" </dev/null || _h_rc=$?
+  elif [ "$#" -gt 0 ]; then
+    "$MUSTER_BIN" push --no-refresh -- "$@" </dev/null || _h_rc=$?
+  else
+    "$MUSTER_BIN" push --no-refresh --all </dev/null || _h_rc=$?
+  fi
+  [ "$_h_rc" -lt 2 ] || RS_BROKE=1
+}
+
 # _rs_act <dry> [name...]: steps 1 and 2, under the box lock.
 _rs_act() {
   _a_box=$(_rn_state_dir)/.box-lock
@@ -235,10 +254,11 @@ _rs_act() {
 }
 
 resolve_main() {
-  _m_dry=
+  _m_dry='' _m_push=''
   while [ "$#" -gt 0 ]; do
     case $1 in
       --dry-run) _m_dry=1 ;;
+      --push) _m_push=1 ;;
       -h|--help) usage; return 0 ;;
       --) shift; break ;;
       -*) echo "muster resolve: unknown option '$1'" >&2; return 2 ;;
@@ -249,6 +269,7 @@ resolve_main() {
   survey_config || return 2
   RS_NEED='' RS_BROKE='' RS_UNFETCHED=''
   _rs_act "$_m_dry" "$@" || return 2
+  [ -z "$_m_push" ] || _rs_push "$_m_dry" "$@"
   [ -n "$_m_dry" ] || _rs_refresh
   _rs_owed_needs "$_m_dry" "$@"
   if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then

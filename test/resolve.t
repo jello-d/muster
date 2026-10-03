@@ -71,7 +71,7 @@ assert "the rebase kept the local work" \
   test "$(cat "$ROOT/diverged/mine")" = "my work"
 assert "push: on the list, with the command" \
   has "$OUT" "push       ahead: 1 unpushed commit(s)"
-assert "push: names the exact command" has "$OUT" "git -C $ROOT/ahead push"
+assert "push: names the exact command" has "$OUT" "then: muster push ahead"
 assert "the rebased repo now owes a push, listed" \
   has "$OUT" "push       diverged:"
 assert "NEVER PUSHES: the ahead repo's origin is unchanged" \
