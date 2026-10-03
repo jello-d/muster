@@ -382,6 +382,12 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
   [ -e "$SV_CONFIG" ] || return 0
   [ -r "$SV_CONFIG" ] \
     || { echo "muster: cannot read config $SV_CONFIG" >&2; return 1; }
+  _sv_cfg_lines && _sv_cfg_place_dups && _sv_cfg_policies
+}
+
+# _sv_cfg_lines: every line's grammar; the first one that does not parse
+# is named, with its line number.
+_sv_cfg_lines() {
   _k_n=0 _k_drv=0 _k_ntf=0
   while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     _k_n=$((_k_n + 1))
@@ -416,9 +422,12 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1
   done < "$SV_CONFIG"
-  # Two `place` roots with the SAME destination: which owns a file there
-  # is ambiguous, so the config is refused (nesting is fine: the most
-  # specific root owns its subtree).
+}
+
+# _sv_cfg_place_dups: two `place` roots with the SAME destination: which
+# owns a file there is ambiguous, so the config is refused (nesting is
+# fine: the most specific root owns its subtree).
+_sv_cfg_place_dups() {
   _k_dup=$(while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     if [ "$_k_kw" = place ]; then
       # shellcheck disable=SC2086  # two words
@@ -429,7 +438,6 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
   [ -z "$_k_dup" ] || { echo "muster: two place roots share the" \
     "destination $_k_dup; give each its own (nesting is allowed)" >&2
     return 1; }
-  _sv_cfg_policies
 }
 
 # _sv_cfg_under <directive>: every path that directive names must sit
