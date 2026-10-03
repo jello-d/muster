@@ -846,4 +846,60 @@ done
 OUT=$(MUSTER_CONFIG=$_T/nocfg "$MUSTER" placed 2>&1); RC=$?
 expect_rc 2 "placed with no roots declared"
 
+# === diff: what changed on each side since it was last placed ==============
+mkdir -p "$SRC/dfx"
+printf 'line one\nline two\n' > "$SRC/dfx/d.conf"
+g "$TK" add -A; g "$TK" commit -m dfx
+act place
+act diff "$DST/dfx/d.conf"
+expect_rc 0 "diff: an in-sync file"
+assert "diff: says nothing differs" has "$OUT" "nothing differs"
+_df_sum() { cksum "$DST/dfx/d.conf" "$SRC/dfx/d.conf" "$MIR/dfx/d.conf"; }
+printf 'line one\nline two\nmy live line\n' > "$DST/dfx/d.conf"
+_df_before=$(_df_sum)
+act diff "$DST/dfx/d.conf"
+expect_rc 1 "diff: something differs (as diff(1))"
+assert "diff: names the file and its verdict" \
+  has "$OUT" "== $DST/dfx/d.conf  (merge-back)"
+assert "diff: the live change, as a unified diff" has "$OUT" "+my live line"
+assert "diff: under the live heading" \
+  has "$OUT" "live changed since it was last placed:"
+assert "diff: no source section when the source is unchanged" \
+  lacks "$OUT" "source changed since"
+assert "diff: READ-ONLY (live, source, baseline untouched)" \
+  test "$(_df_sum)" = "$_df_before"
+printf 'line zero\nline one\nline two\n' > "$SRC/dfx/d.conf"
+g "$TK" commit -qam "source side"
+act diff "$DST/dfx/d.conf"
+assert "diff: both sides of a conflict" \
+  has "$OUT" "source changed since it was last placed:"
+assert "diff: the source change" has "$OUT" "+line zero"
+assert "diff: and the live one, still" has "$OUT" "+my live line"
+act diff "$SRC/dfx/d.conf"
+assert "diff: a SOURCE path selects the same file" \
+  has "$OUT" "== $DST/dfx/d.conf"
+chmod 755 "$SRC/dfx/d.conf"
+act diff "$DST/dfx/d.conf"
+# The baseline's REAL mode, not a literal: it follows the umask (002
+# here gives 664), and an assertion that assumed 644 failed on it.
+assert "diff: a mode change gets its own line" \
+  has "$OUT" "mode       last placed $(mode "$MIR/dfx/d.conf"), source 755"
+echo 'brand new' > "$SRC/dfx/n.conf"
+g "$TK" add -A; g "$TK" commit -m "never placed"
+act diff "$DST/dfx/n.conf"
+assert "diff: a file never placed, source against nothing" \
+  has "$OUT" "+brand new"
+act diff
+assert "diff, no paths: every file not in sync" \
+  has "$OUT" "== $DST/dfx/n.conf"
+# An app-held file DIFFERS by design (the application writes it), so it
+# is what the default filter exists for: left out unless named.
+assert "diff, no paths: an app-held file is left out" \
+  lacks "$OUT" "$AD/settings.json"
+act diff "$AD/settings.json"
+assert "diff, named: an app-held file is shown" \
+  has "$OUT" "== $AD/settings.json  (app-held)"
+act diff "$DST/no/such/file"
+expect_rc 2 "diff: a path under no managed file"
+
 h_verdict

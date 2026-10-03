@@ -210,11 +210,12 @@ something does, 2 a step could not run.
                  or use ssh -A, then resolve
     reseed       a vendored copy differs: the integrator's notes sweep
     redeploy     a deployed clone differs: the integrator's pin sweep
-    merge-back   a live edit not in the source: review (muster where),
+    merge-back   a live edit not in the source: review (muster diff),
                  then muster merge-back <path>, and commit
-    capture      an application's file not in the source: review, then
-                 muster capture <path>, and commit
+    capture      an application's file not in the source: review
+                 (muster diff), then muster capture <path>, and commit
     conflict     changed live AND in the source: decide which wins
+                 (muster diff shows both sides)
     displaced    a repo-owned edit kept aside: salvage it, then
                  muster displaced clear <run> <path>
     source-link, foreign, linked-dir, shadowed
@@ -437,6 +438,7 @@ stored. The commands:
     muster merge-back [--dry-run] [path...]  live edits into the source
     muster capture [--dry-run] [path...]     an app's work into the source
     muster where <path>                      source <-> destination
+    muster diff [path...]                    what changed on each side
     muster displaced [list | clear ...]      repo-owned edits kept aside
 
 Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),

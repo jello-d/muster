@@ -725,6 +725,92 @@ placed_main() {
   done | _pl_render "$_d_mode"
 }
 
+# _pl_diff_side <label> <from> <to> <dest>: one side's change since the
+# file was last placed, as a unified diff, or nothing. Exit 2 when diff
+# could not compare (a file it cannot read), said rather than swallowed.
+_pl_diff_side() {
+  _e_rc=0
+  _e_out=$(diff -u --label "last placed  $4" --label "$1  $4" "$2" "$3") \
+    || _e_rc=$?
+  [ "$_e_rc" -lt 2 ] || { echo "muster diff: cannot compare $3" >&2
+    return 2; }
+  [ -z "$_e_out" ] || printf '%s\n' "$_e_out"
+}
+
+# _pl_diff_one <verdict> <dest> <source>: what changed on EACH side since
+# the file was last placed: last placed -> source, last placed -> live.
+# One rule for every verdict: a merge-back shows only live changes, a
+# conflict both, a file never placed the source against nothing. Mode is
+# content here (P7) and diff cannot see it, so it gets its own line.
+# Returns 1 when there is nothing to show.
+_pl_diff_one() {
+  _o_base=$(_pl_state)/root$2
+  [ -f "$_o_base" ] || _o_base=/dev/null
+  _o_src=$3
+  { [ -f "$_o_src" ] && [ ! -h "$_o_src" ]; } || _o_src=/dev/null
+  _o_live=$2
+  [ -f "$_o_live" ] || _o_live=/dev/null
+  _o_sd=$(_pl_diff_side "source     " "$_o_base" "$_o_src" "$2") || return 2
+  _o_ld=$(_pl_diff_side "live       " "$_o_base" "$_o_live" "$2") || return 2
+  _o_mb=$(_pl_mode "$_o_base") _o_ms=$(_pl_mode "$_o_src")
+  _o_ml=$(_pl_mode "$_o_live")
+  _o_mode=
+  if [ "$_o_base" != /dev/null ]; then
+    if { [ "$_o_src" != /dev/null ] && [ "$_o_mb" != "$_o_ms" ]; } \
+      || { [ "$_o_live" != /dev/null ] && [ "$_o_mb" != "$_o_ml" ]; }; then
+      _o_mode="mode       last placed $_o_mb, source $_o_ms, live $_o_ml"
+    fi
+  fi
+  [ -n "$_o_sd$_o_ld$_o_mode" ] || return 1
+  printf '== %s  (%s)\n' "$2" "$1"
+  [ -z "$_o_mode" ] || printf '%s\n' "$_o_mode"
+  [ -z "$_o_sd" ] || printf 'source changed since it was last placed:\n%s\n' \
+    "$_o_sd"
+  [ -z "$_o_ld" ] || printf 'live changed since it was last placed:\n%s\n' \
+    "$_o_ld"
+}
+
+# diff_main [path...]: for each placed file not in sync (or each under the
+# paths given, destination or source), what changed on each side since it
+# was last placed. Read-only. Exit 0 nothing differs, 1 something does
+# (as diff(1)), 2 it could not run or a path matched no managed file.
+diff_main() {
+  case ${1:-} in
+    -h|--help) usage; return 0 ;;
+    -*) echo "muster diff: unknown option '$1'" >&2; return 2 ;;
+  esac
+  survey_config || return 2
+  [ -n "$(_pl_roots)" ] || { echo "muster: no \`place\` roots declared" >&2
+    return 2; }
+  command -v diff >/dev/null 2>&1 \
+    || { echo "muster diff: needs diff(1) (diffutils)" >&2; return 2; }
+  _f_recs=$(placement_records)
+  _f_any='' _f_hit='' _f_bad=''
+  while IFS= read -r _f_r; do
+    [ -n "$_f_r" ] || continue
+    _f_d=$(_st_unesc "$(_st_field "$_f_r" path)")
+    _f_s=$(_st_unesc "$(_st_field "$_f_r" source)")
+    _f_v=$(_st_field "$_f_r" verdict)
+    if [ "$#" -gt 0 ]; then
+      _pl_selected "$_f_d" "$@" || _pl_selected "$_f_s" "$@" || continue
+      _f_hit=1
+    else
+      case $_f_v in in-sync|app-held|unmanaged) continue ;; esac
+    fi
+    _f_rc=0
+    _pl_diff_one "$_f_v" "$_f_d" "$_f_s" || _f_rc=$?
+    case $_f_rc in 0) _f_any=1 ;; 2) _f_bad=1 ;; esac
+  done <<RECORDS
+$_f_recs
+RECORDS
+  if [ "$#" -gt 0 ] && [ -z "$_f_hit" ]; then
+    echo "muster diff: no managed file under: $*" >&2; return 2
+  fi
+  [ -z "$_f_bad" ] || return 2
+  [ -n "$_f_any" ] || { echo "nothing differs"; return 0; }
+  return 1
+}
+
 # where_main <path>: resolve a path in either direction (P9).
 where_main() {
   [ "$#" = 1 ] || { echo "usage: muster where <path>" >&2; return 2; }

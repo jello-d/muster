@@ -177,11 +177,11 @@ _rs_place_one() {
   case $2 in
     in-sync|app-held|unmanaged) ;;
     merge-back) _rs_need merge-back "$3: a live edit not yet in the" \
-      "source; review it (muster where $3), then: muster merge-back $3" ;;
+      "source; review it (muster diff $3), then: muster merge-back $3" ;;
     capture) _rs_need capture "$3: an application's file not yet in the" \
-      "source; review it, then: muster capture $3" ;;
+      "source; review it (muster diff $3), then: muster capture $3" ;;
     conflict) _rs_need conflict "$3: changed live AND in the source;" \
-      "decide which wins (muster where $3)" ;;
+      "decide which wins (muster diff $3)" ;;
     source-link) _rs_need "$2" "$3: its source is a symlink, never placed;" \
       "make it a file, or move it out of the root" ;;
     foreign|linked-dir) _rs_need "$2" "$3: a link to somewhere else, not" \

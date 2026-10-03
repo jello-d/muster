@@ -157,14 +157,14 @@ placement_findings() {
       new|missing|place|converged|migrate|migrate-dir|displace|orphan)
         echo "drift place      $_g_v $_g_p" ;;
       capture) echo "fault capture    $_g_p: an application's work not" \
-        "yet in the source; review it, then muster capture" ;;
+        "yet in the source; review it (muster diff), then muster capture" ;;
       shadowed) echo "fault place      shadowed $_g_p: a more specific" \
         "root owns this path; remove it from one of the two sources" ;;
       source-link) echo "fault place      source-link $_g_p: its source" \
         "is a symlink, which is never placed; make it a file or move it" \
         "out of the root" ;;
       merge-back) echo "fault merge-back $_g_p: a live edit not yet" \
-        "in the source; review it, then muster merge-back" ;;
+        "in the source; review it (muster diff), then muster merge-back" ;;
       *) echo "fault place      $_g_v $_g_p" ;;
     esac
   done <<RECORDS

@@ -141,6 +141,12 @@ commands:
   capture [--dry-run] [path...]
          fold an application's new or changed files (under a `capture`
          directory) into the source working tree; never commits
+  diff   [path...]
+         what changed on EACH side of a placed file since it was last
+         placed (last placed -> source, last placed -> live, and mode):
+         every file not in sync, or those under the paths given, as
+         destination or source. Read-only; the review before
+         merge-back, capture, or deciding a conflict
   where  <path>
          which source a destination comes from, or the reverse
   displaced [list | clear <run> <path>... | clear --all]
@@ -168,6 +174,7 @@ case ${1:-} in
   place) shift; place_main "$@" ;;
   merge-back) shift; merge_back_main "$@" ;;
   capture) shift; capture_main "$@" ;;
+  diff) shift; diff_main "$@" ;;
   where) shift; where_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
   help|-h|--help) usage ;;
