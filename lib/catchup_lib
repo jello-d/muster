@@ -141,8 +141,8 @@ catchup_record() {
   printf 'name=%s action=%s result=%s from=%s to=%s' "$(_sv_esc "$1")" \
     "$CU_ACTION" "$CU_RESULT" "$(_sv_short "$CU_FROM")" \
     "$(_sv_short "$CU_TO")"
-  printf ' owed=%s remaining=%s path=%s\n' "$CU_OWED" "$CU_REMAINING" \
-    "$(_sv_esc "$2")"
+  printf ' owed=%s remaining=%s state=%s fetched=%s path=%s\n' "$CU_OWED" \
+    "$CU_REMAINING" "$SV_STATE" "$SV_FETCHED" "$(_sv_esc "$2")"
 }
 
 # _cu_render <porcelain|table|attention>: exits 1 unless every repo ends owing
@@ -233,7 +233,8 @@ _cu_set_record() {
   set -- "$1" "$2" $_s_pre
   printf 'name=%s action=%s result=%s from=%s to=%s owed=%s' \
     "$(_sv_esc "$1")" "$4" "$5" "$6" "$7" "$8"
-  printf ' remaining=%s path=%s\n' "$OW_LIST" "$(_sv_esc "$2")"
+  printf ' remaining=%s state=%s fetched=%s path=%s\n' "$OW_LIST" \
+    "$SV_STATE" "$SV_FETCHED" "$(_sv_esc "$2")"
 }
 
 catchup_main() {

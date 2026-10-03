@@ -265,7 +265,7 @@ assert "R10: one table row per record, plus the header" \
   test "$(printf '%s\n' "$OUTT" | wc -l)" \
   -eq "$(( $(printf '%s\n' "$OUTP" | wc -l) + 1 ))"
 assert "table: has a header" starts "$OUTT" REPO
-KEYS='name action result from to owed remaining path'
+KEYS='name action result from to owed remaining state fetched path'
 assert "every record carries every key, in order" \
   test -z "$(printf '%s\n' "$OUTP" | awk -v want="$KEYS" '{
     s = ""

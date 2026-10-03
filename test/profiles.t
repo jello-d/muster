@@ -316,6 +316,40 @@ chmod +x "$_T/badnotifier"
 MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/badnotifier cli run n
 assert "a failing notifier is reported" has "$ERR" "notifier"
 
+# === unreachable is not attention, for a while ==============================
+# A fetch that fails (the locked keyring at the greeter, measured by the
+# integrator) leaves a row `unknown`. While the last GOOD fetch is fresh
+# it does not raise the flag; once that is over a day old it does, so a
+# key that stays broken is not hidden. Both verbs that fetch obey it.
+mkrepo nunreach
+g "$ROOT/nunreach" remote set-url origin "$_T/origins/no-such.git"
+printf 'profile u owed 1h\nrepo nunreach\n' > "$C/u"
+printf 'profile uc catch-up 1h\nrepo nunreach\n' > "$C/uc"
+urun() { MUSTER_CONFIG=$C/$1 MUSTER_NOTIFY=$_T/notifier cli run "$1"; }
+urun u
+assert "unreachable, fetched recently: the row is still reported" \
+  has "$(cat "$S/u/latest.records")" "fetch-failed"
+assert "unreachable, fetched recently: owed does not flag" \
+  test "$(nlast)" = "clear muster-u"
+urun uc
+assert "unreachable, fetched recently: catch-up does not flag" \
+  test "$(nlast)" = "clear muster-uc"
+for _u_f in FETCH_HEAD logs/refs/remotes/origin/main \
+    logs/refs/remotes/origin/HEAD; do
+  [ ! -e "$ROOT/nunreach/.git/$_u_f" ] \
+    || touch -t 202001010000 "$ROOT/nunreach/.git/$_u_f"
+done
+urun u
+assert "unreachable for over a day: owed flags it" \
+  test "$(nlast)" = "flag muster-u muster u: 1 repo(s) need attention: nunreach"
+urun uc
+assert "unreachable for over a day: catch-up flags it" \
+  starts "$(nlast)" "flag muster-uc muster uc: 1 repo(s)"
+# Reachable again: a real verdict, judged as any other.
+g "$ROOT/nunreach" remote set-url origin "$_T/origins/nunreach.git"
+urun u
+assert "reachable again: clean, cleared" test "$(nlast)" = "clear muster-u"
+
 # === the command line =======================================================
 cli run
 expect_rc 2 "run with no profile"
