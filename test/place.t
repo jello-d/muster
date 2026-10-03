@@ -338,6 +338,72 @@ rm -f "$DST/elsedir"
 g "$TK" rm -q -r link/config/elsedir; g "$TK" commit -m unelse
 act place
 
+# === a SOURCE symlink is refused out loud, never dropped (T11) ==============
+# The integrator's reproduction: a root holding a file, an executable and
+# a symlink between two installed locations. It used to place the first
+# two and say nothing at all about the third, which would have deleted
+# commands from PATH. Now: its own verdict, a fault, named by every view.
+mkdir -p "$SRC/shims" "$_T/installed"
+echo 'tool' > "$_T/installed/tool"
+echo 'data' > "$SRC/shims/data.conf"
+printf '#!/bin/sh\n' > "$SRC/shims/toolx"
+chmod 755 "$SRC/shims/toolx"
+ln -s "$_T/installed/tool" "$SRC/shims/aliasx"
+g "$TK" add -A; g "$TK" commit -m shims
+pl
+expv "$DST/shims/aliasx" source-link
+expv "$DST/shims/data.conf" new
+act place
+expect_rc 1 "place with a source symlink: not clean"
+assert "place: names the refused symlink" \
+  has "$OUT" "refused    $DST/shims/aliasx: its source"
+assert "place: nothing is created for it" \
+  test ! -e "$DST/shims/aliasx" -a ! -h "$DST/shims/aliasx"
+assert "place: its siblings are placed regardless" \
+  same "$SRC/shims/data.conf" "$DST/shims/data.conf"
+assert "place: the exec bit survives" test "$(mode "$DST/shims/toolx")" = 755
+OUT=$("$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a source symlink is a FAULT"
+assert "check: names it, with the remedy" \
+  has "$OUT" "source-link $DST/shims/aliasx: its source is a symlink"
+g "$TK" rm -q link/config/shims/aliasx; g "$TK" commit -m unalias
+act place
+expect_rc 0 "the symlink out of the source: clean again"
+
+# A whole-directory link whose directory holds a symlink: migrating it
+# copies regular files only, so the symlink would vanish with the link.
+# Refused, each entry named, the link left exactly as it was. A tracked
+# symlink and an ignored one alike: the ignored one is what the link
+# shows, and P12 keeps everything the link shows.
+mkdir -p "$SRC/lnkdir"
+echo 'x' > "$SRC/lnkdir/x.conf"
+ln -s "$_T/installed/tool" "$SRC/lnkdir/cmd"
+g "$TK" add -A; g "$TK" commit -m lnkdir
+ln -s "$_T/installed/tool" "$SRC/lnkdir/rt.log"   # ignored, not source
+ln -s "$SRC/lnkdir" "$DST/lnkdir"
+pl
+expv "$DST/lnkdir/x.conf" migrate-dir
+expv "$DST/lnkdir/cmd" source-link
+act place --dry-run
+assert "dry-run: says the migration would be refused" \
+  has "$OUT" "would REFUSE migrate-dir $DST/lnkdir"
+act place
+expect_rc 2 "a migration refused for a symlink is a failed write"
+assert "migration refused: names the tracked symlink" \
+  has "$OUT" "refused    $DST/lnkdir/cmd: not a regular file"
+assert "migration refused: names the ignored symlink" \
+  has "$OUT" "refused    $DST/lnkdir/rt.log: not a regular file"
+assert "migration refused: the directory link is left as it was" \
+  test "$(readlink "$DST/lnkdir")" = "$SRC/lnkdir"
+assert "migration refused: no half-built directory beside it" \
+  test -z "$(find "$DST" -maxdepth 1 -name '*muster-tmp*')"
+g "$TK" rm -q link/config/lnkdir/cmd; g "$TK" commit -m uncmd
+rm -f "$SRC/lnkdir/rt.log"
+act place
+expect_rc 0 "with no symlink inside, the migration goes ahead"
+assert "and the link is a real directory now" \
+  test -d "$DST/lnkdir" -a ! -h "$DST/lnkdir"
+
 # === increment 2: capture, for directories an APPLICATION writes into ======
 mkdir -p "$SRC/kprof"
 echo 'layout one' > "$SRC/kprof/one.conf"

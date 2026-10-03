@@ -155,6 +155,9 @@ _ck_placement() {
         "yet in the source; review it, then muster capture" ;;
       shadowed) _ck_add fault "place      shadowed $_g_p: a more specific" \
         "root owns this path; remove it from one of the two sources" ;;
+      source-link) _ck_add fault "place      source-link $_g_p: its source" \
+        "is a symlink, which is never placed; make it a file or move it" \
+        "out of the root" ;;
       merge-back) _ck_add fault "merge-back $_g_p: a live edit not yet" \
         "in the source; review it, then muster merge-back" ;;
       *) _ck_add fault "place      $_g_v $_g_p" ;;

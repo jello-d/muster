@@ -93,6 +93,9 @@ MUST BE TRUE: comparing the three versions yields exactly one of:
     new          in source, never placed: place it
     orphan       gone from source, still placed (see P8)
     unmanaged    live exists, no baseline: never touched (see P10)
+    source link  the SOURCE is a symlink: never placed, a fault naming
+                 it (added 2026-10-02, T11: it was dropped in silence,
+                 which would have deleted commands from PATH)
     unreadable   could not look (R4: never reported as absent)
 
 and maps onto muster's exit contract: what a place repairs is DRIFT
@@ -327,7 +330,10 @@ nothing, because the live file and the source were one file. A symlink
 pointing anywhere else is a fault. A whole-directory link is replaced by
 a real directory of placed files, and anything only visible through the
 old link (untracked files inside the linked source directory) is reported
-before it disappears from view.
+before it disappears from view. A whole-directory link that shows a
+symlink (tracked or not) is NOT migrated: only regular files are copied,
+so the symlink would vanish with the link. The migration is refused,
+each such entry named, and the link left exactly as it was.
 
 WHY: the integrator has on the order of a hundred such links plus a few
 whole-directory ones, and the migration is the risky moment.

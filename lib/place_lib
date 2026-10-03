@@ -49,6 +49,11 @@
 #   capture     under a `capture` directory (one an APPLICATION writes
 #               into): a file the app created, or changed since it was
 #               placed. `muster capture` folds it into the source
+#   source-link the SOURCE is a symlink: never placed, never acted on, a
+#               fault naming it. Copying it would publish its target's
+#               content and lose that it was a link; dropping it in
+#               silence (the old behaviour) deleted commands from PATH
+#               with no word said. Make it a file, or move it out
 #   unreadable  could not look (R4)
 #   no-source   the source root is missing, empty or unreadable: a FAULT,
 #               and nothing under it is placed or removed (P8's guard)
@@ -110,12 +115,14 @@ _pl_sources() {
     git -C "$1" -c core.quotePath=false ls-files --cached --others \
       --exclude-standard -- . 2>/dev/null \
       | while IFS= read -r _s_f; do
-          if [ -f "$1/$_s_f" ] && [ ! -h "$1/$_s_f" ]; then
+          # A SYMLINK IS LISTED, so it gets a verdict (source-link)
+          # rather than vanishing: skipping it here was the silence.
+          if [ -h "$1/$_s_f" ] || [ -f "$1/$_s_f" ]; then
             printf '%s\n' "$_s_f"
           fi
         done
   else
-    (cd "$1" && find . -type f | sed 's|^\./||')
+    (cd "$1" && find . \( -type f -o -type l \) | sed 's|^\./||')
   fi
 }
 
@@ -189,6 +196,9 @@ _pl_verdict() {
   # while still behind its directory link).
   _v_cap=''
   if _pl_capture_file "$PL_D"; then _v_cap=1 PL_POL=app-owned; fi
+  # Before everything, migration included: a migration would otherwise
+  # carry the link's destination along and decide its fate unseen.
+  if [ -h "$PL_S" ]; then PL_V=source-link; return 0; fi
   _v_s='' _v_b='' _v_l=''
   [ -f "$PL_S" ] && _v_s=1
   [ -f "$PL_M" ] && _v_b=1
@@ -516,6 +526,10 @@ _pl_selected() {   # <dest> [path...]: no paths selects everything
 }
 
 _pl_place_cb() {
+  if [ "$PL_V" = source-link ]; then
+    printf 'refused    %s: its source %s is a symlink, never placed\n' \
+      "$PL_D" "$PL_S"; return 0
+  fi
   _pl_drift_verdict "$PL_V" || return 0
   case $PL_V in merge-back|capture) return 0 ;; esac
   if [ "$PL_V" = migrate-dir ]; then _pl_migrate_cb; return; fi
@@ -551,7 +565,13 @@ _pl_merge_cb() {
 # then judged again on the real directory and acted on like any other.
 _pl_migrate_cb() {
   if [ -n "$PL_DRY" ]; then
-    printf 'would migrate-dir %s (for %s)\n' "$PL_LDIR" "$PL_D"; return 0
+    if [ -n "$(_pl_odd_entries "$PL_LDIR")" ]; then
+      printf 'would REFUSE migrate-dir %s: it holds entries that are not\n' \
+        "$PL_LDIR"
+      printf '           regular files (a real place names them)\n'
+    else printf 'would migrate-dir %s (for %s)\n' "$PL_LDIR" "$PL_D"
+    fi
+    return 0
   fi
   _pl_migrate_dir "$PL_LDIR" \
     || { printf 'FAILED     migrate-dir %s\n' "$PL_LDIR"
@@ -571,6 +591,18 @@ _pl_migrate_cb() {
 # verified, and only then swapped in.
 _pl_migrate_dir() {
   [ -h "$1" ] && [ -d "$1" ] || return 1
+  # Only regular files are copied, so anything else seen through the link
+  # (a symlink, a fifo) would vanish with it: refuse, name each, and leave
+  # the link as it was.
+  _g_odd=$(_pl_odd_entries "$1")
+  if [ -n "$_g_odd" ]; then
+    printf '%s\n' "$_g_odd" | while IFS= read -r _g_o; do
+      printf 'refused    %s: not a regular file, so a migration would' \
+        "$1/${_g_o#./}"
+      printf ' drop it\n'
+    done
+    return 1
+  fi
   _g_tmp=$(dirname -- "$1")/.${1##*/}$PL_TMP.$$
   case $_g_tmp in *"$PL_TMP".*) ;; *) return 1 ;; esac
   mkdir -- "$_g_tmp" || return 1
@@ -588,6 +620,10 @@ _pl_migrate_dir() {
   rm -f -- "$1" && mv -- "$_g_tmp" "$1" && [ -d "$1" ] && [ ! -h "$1" ] \
     && printf 'migrated   %s (directory link replaced by copies)\n' "$1"
 }
+
+# _pl_odd_entries <dir>: everything under it that is neither a regular
+# file nor a directory, one relative path per line.
+_pl_odd_entries() { (cd "$1/" && find . ! -type f ! -type d); }
 
 # _pl_rm_tmpdir <dir>: remove a half-built migration directory, and ONLY
 # that: the path must carry the temp marker, and removal is file by file

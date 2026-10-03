@@ -333,10 +333,13 @@ Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),
 `place`, `converged`, `migrate` (a symlink into its own source becomes a
 copy), `migrate-dir` (a whole-directory link into its own source
 becomes a real directory; files the link showed that are not source are
-kept as unmanaged copies and named), `merge-back`, `capture`,
+kept as unmanaged copies and named; refused, with the link left as it
+was, while it shows a symlink, which a copy would drop), `merge-back`,
+`capture`,
 `displace`, `orphan`, `app-held`, `conflict`, `shadowed`, `foreign`,
 `linked-dir` (a directory link to anywhere else: never touched),
-`read-only`, `unreadable`, `no-source`.
+`source-link` (the source is a symlink: never placed, a fault naming
+it), `read-only`, `unreadable`, `no-source`.
 
 No edit is lost under any policy. `place` never overwrites a
 user-editable live edit (that is a merge-back or a conflict); it
