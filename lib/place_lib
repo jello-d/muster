@@ -628,13 +628,15 @@ _pl_migrate_dir() {
   _g_tmp=$(dirname -- "$1")/.${1##*/}$PL_TMP.$$
   case $_g_tmp in *"$PL_TMP".*) ;; *) return 1 ;; esac
   mkdir -- "$_g_tmp" || return 1
-  if ! (cd "$1/" && find . -type f) | while IFS= read -r _g_f; do
+  # The loop is a ( ) subshell: its `exit 1` must leave the LOOP, and
+  # under ksh or zsh the last part of a bare pipeline is this shell.
+  if ! (cd "$1/" && find . -type f) | (while IFS= read -r _g_f; do
       _g_f=${_g_f#./}
       _pl_put "$1/$_g_f" "$_g_tmp/$_g_f" || exit 1
       _pl_is_source "$1/$_g_f" \
         || printf 'kept       %s (not source: unmanaged)\n' \
              "$1/$_g_f"
-    done; then
+    done); then
     _pl_rm_tmpdir "$_g_tmp"
     printf 'FAILED     copying %s; the link is left as it was\n' "$1"
     return 1
