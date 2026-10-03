@@ -218,9 +218,10 @@ something does, 2 a step could not run.
 WHEN THE BANNER FIRES: `muster report` shows what the timer saw (instant,
 no network); `muster resolve --dry-run` shows what can be done and what
 cannot; `muster resolve` does it. A fix made by hand shows in `report`
-only after the next run: `muster run <profile>`, or `resolve`, which
-re-runs them all. `muster check` is the deeper question, whether muster
-itself is healthy here, and is where config faults show without a run.
+after the next run, and until then report names the repos that moved
+and the command to refresh: `muster run <profile>`, or `resolve`.
+`muster check` is the deeper question, whether muster itself is healthy
+here, and is where config faults show without a run.
 
 ### Profiles, run and report
 
@@ -279,6 +280,15 @@ success: timers count awake time only, so after a suspend the wall clock
 runs ahead of them by exactly the sleep. Below
 that, each profile's rows that need attention, drawn by the verb's own
 renderer. Exit 0 only when every profile is `ok`.
+
+A stored run is what its timer SAW. Each run also records every repo's
+HEAD and upstream as it left them, and `report` compares: a repo that
+has moved since (a pull, a push, a commit, a fetch) is named in a footer
+with the command that makes the report current, `muster run <profile>`,
+or `muster resolve` for all of them. Uncommitted edits do not count, or
+every repo someone is working in would read changed all day. A hint,
+never a failure: the exit is unchanged. Porcelain carries it as
+`moved=<repo,...>` or `moved=-`.
 
 The notifier (`notify </absolute/path>` in the config, or
 `$MUSTER_NOTIFY`, which overrides it) gets each run's STATE in the fleet's

@@ -92,8 +92,9 @@ commands:
          every profile's latest STORED run: age, status, and the rows
          that need attention. A run older than twice its interval is
          stale, and one that never happened says never. Instant, no
-         network; a fix made by hand shows only after the next run
-         (muster run <profile>, or resolve, which re-runs them all)
+         network. A repo that moved since its run (a pull, a push, a
+         commit made by hand) is named at the end, with the command that
+         makes the report current: muster run <profile>, or resolve
   schedule install|check|remove
          systemd user timers for the profiles: install makes them match,
          check reports drift (exit 1), remove takes muster's units away

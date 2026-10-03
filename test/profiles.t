@@ -27,6 +27,7 @@ pfield() {   # <profile> <key>: from report --porcelain in OUT
   printf '%s\n' "$OUT" | awk -v p="profile=$1" '$1 == p' | tr ' ' '\n' \
     | sed -n "s/^$2=//p"
 }
+lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 meta() { sed -n "s/^$2=//p" "$S/$1/latest.meta"; }
 nhist() { find "$S/$1/history" -name '*.meta' | wc -l | tr -d ' '; }
 
@@ -318,6 +319,62 @@ printf '#!/bin/sh\nexit 1\n' > "$_T/badnotifier"
 chmod +x "$_T/badnotifier"
 MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/badnotifier cli run n
 assert "a failing notifier is reported" has "$ERR" "notifier"
+
+# === report says when a stored run is out of date ===========================
+# A stored run is what the timer SAW. When its repos move after it (a
+# manual pull, a push, a commit), report names them, with the command
+# that makes it current: found live, a manual catch-up worked and report
+# stayed red, with nothing saying it was out of date.
+mkrepo mv1
+mkrepo mv2
+printf 'profile mv owed 1h\nrepo mv1\nrepo mv2\n' > "$C/mv"
+mvp() { MUSTER_CONFIG=$C/mv cli "$@"; }
+mvp run mv
+assert "a run stores the refs it left" test -s "$S/mv/latest.heads"
+mvp report
+expect_rc 0 "fresh run, nothing moved: report is clean"
+assert "nothing moved: no footer" lacks "$OUT" "changed since"
+mvp report --porcelain
+assert "porcelain: moved=- when nothing moved" \
+  test "$(pfield mv moved)" = -
+echo more >> "$ROOT/mv1/f"
+g "$ROOT/mv1" commit -am "a commit made by hand"
+_st_before=$(find "$S" -type f | sort | xargs cksum 2>/dev/null)
+mvp report
+expect_rc 0 "a moved repo is a hint, not a failure"
+assert "footer: names the profile and the repo" \
+  has "$OUT" "mv: 1 repo(s) changed since its run (mv1)"
+assert "footer: gives the refresh command" has "$OUT" "refresh: muster run mv"
+assert "footer: points at resolve" has "$OUT" "muster resolve"
+assert "footer: the unmoved repo is not named" lacks "$OUT" "mv2)"
+assert "report wrote nothing into the store (read-only)" \
+  test "$(find "$S" -type f | sort | xargs cksum 2>/dev/null)" = "$_st_before"
+mvp report --porcelain
+assert "porcelain: moved names the repo" test "$(pfield mv moved)" = mv1
+# An upstream that moves counts too: a fetch is how a pull arrives.
+upstream_moves mv2
+g "$ROOT/mv2" fetch
+mvp report --porcelain
+assert "a fetched upstream counts as moved" \
+  test "$(pfield mv moved)" = mv1,mv2
+mvp run mv
+mvp report
+assert "after the refresh: no footer" lacks "$OUT" "changed since"
+# A run that could not run stores no refs, so nothing is compared
+# against an older run's.
+mkdir "$S/.box-lock"
+sleep 30 &
+_mvh=$!
+echo "$_mvh" > "$S/.box-lock/pid"
+MUSTER_RUN_WAIT=1 mvp run mv
+kill "$_mvh" 2>/dev/null
+wait "$_mvh" 2>/dev/null
+rm -f "$S/.box-lock/pid"
+rmdir "$S/.box-lock"
+assert "a run that did not run leaves no refs behind" \
+  test ! -e "$S/mv/latest.heads"
+mvp report --porcelain
+assert "and reports nothing moved" test "$(pfield mv moved)" = -
 
 # === unreachable is not attention, for a while ==============================
 # A fetch that fails (the locked keyring at the greeter, measured by the

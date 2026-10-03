@@ -222,6 +222,10 @@ _rn_store() {
   for _s_x in records err meta; do
     mv -f "$3.$_s_x" "$1/latest.$_s_x"
   done
+  # The heads belong to THIS run or to none: never a previous run's.
+  if [ -f "$3.heads" ]; then mv -f "$3.heads" "$1/latest.heads"
+  else rm -f "$1/latest.heads"
+  fi
   # Prune to the newest $MUSTER_KEEP runs. Names lead with epoch seconds,
   # so a numeric sort is chronological.
   _s_keep=${MUSTER_KEEP:-48}
@@ -346,14 +350,16 @@ _rn_run_locked() {
   # Holding it now, so the cleanup may release it; armed only once held,
   # or an interrupted waiter would delete another run's lock.
   # shellcheck disable=SC2064  # expanding now is the point
-  trap "rm -f '$3.records' '$3.err' '$3.meta' '$2/lock/pid' \
+  trap "rm -f '$3.records' '$3.err' '$3.meta' '$3.heads' '$2/lock/pid' \
     '$_q_box/pid'; rmdir '$2/lock' '$_q_box' 2>/dev/null" EXIT
   _q_rc=0
   _rn_invoke "$1" >"$3.records" 2>"$3.err" </dev/null || _q_rc=$?
+  # Still holding the box: the refs as this run LEFT them.
+  _rn_heads "$3.records" >"$3.heads" 2>/dev/null || :
   # Released: disarm the box paths FIRST, so an interruption from here on
   # cannot remove a lock another run has taken in the meantime.
   # shellcheck disable=SC2064  # expanding now is the point
-  trap "rm -f '$3.records' '$3.err' '$3.meta' '$2/lock/pid'; \
+  trap "rm -f '$3.records' '$3.err' '$3.meta' '$3.heads' '$2/lock/pid'; \
     rmdir '$2/lock' 2>/dev/null" EXIT
   rm -f "$_q_box/pid"
   rmdir "$_q_box" 2>/dev/null || :
@@ -388,7 +394,7 @@ run_main() {
   # paths are baked in NOW, as literals, per the house rule on deferred
   # expansion in a destructive trap (rm -f only, never -r).
   # shellcheck disable=SC2064  # expanding now is the point
-  trap "rm -f '$_m_tmp.records' '$_m_tmp.err' '$_m_tmp.meta' \
+  trap "rm -f '$_m_tmp.records' '$_m_tmp.err' '$_m_tmp.meta' '$_m_tmp.heads' \
     '$_m_dir/lock/pid'; rmdir '$_m_dir/lock' 2>/dev/null" EXIT
   _m_start=$(date +%s)
   _m_rc=0
@@ -435,6 +441,44 @@ _rn_intent_since() {
     external) _sv_mtime "$SV_CONFIG" ;;
     *) return 1 ;;
   esac
+}
+
+# _rn_heads <records-file|->: "<escaped-path> <head> <upstream-head>" for
+# each repo in a run's records, `-` where there is none. What `report`
+# compares to say a run is out of date: HEAD and the upstream ref move on
+# a pull, a push, a commit, a rebase or a fetch, which is every way the
+# fleet's state changes. Uncommitted edits are left out on purpose: they
+# would call every repo someone is working in "changed" all day. Two
+# rev-parses a repo, so it stays instant (measured: ~0.1s for 23 repos,
+# where a full stamp check took 1.8s).
+_rn_heads() {
+  awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^path=/) {
+           sub(/^path=/, "", $i); print $i } }' "$1" \
+    | while IFS= read -r _h_e; do
+        _h_p=$(_st_unesc "$_h_e")
+        _h_h=$(git -C "$_h_p" rev-parse -q --verify HEAD 2>/dev/null) \
+          || _h_h=-
+        _h_u=$(git -C "$_h_p" rev-parse -q --verify '@{upstream}' \
+          2>/dev/null) || _h_u=-
+        printf '%s %s %s\n' "$_h_e" "$_h_h" "$_h_u"
+      done
+}
+
+# _rn_moved <heads-file>: the repos whose HEAD or upstream moved since,
+# comma-joined (their directory names), or `-`.
+_rn_moved() {
+  [ -s "$1" ] || { printf -; return 0; }
+  _v_now=$(_rn_heads_of "$1")
+  printf '%s\n' "$_v_now" | awk 'NR == FNR { then[$1] = $2 " " $3; next }
+    ($1 in then) && then[$1] != $2 " " $3 {
+      n = $1; sub(/.*\//, "", n); o = o (o == "" ? "" : ",") n }
+    END { print (o == "" ? "-" : o) }' "$1" -
+}
+
+# _rn_heads_of <heads-file>: the same repos' refs as they stand now.
+# Piped, never a temp file: report is a read-only verb.
+_rn_heads_of() {
+  awk '{ printf "path=%s\n", $1 }' "$1" | _rn_heads -
 }
 
 # _rn_timer_alive <profile> <interval>: does SYSTEMD say it is still
@@ -504,8 +548,10 @@ _rn_status() {
   fi
   printf 'profile=%s verb=%s every=%s driver=%s status=%s finished=%s' \
     "$1" "$2" "$3" "$4" "$_t_st" "$_t_fin"
-  printf ' exit=%s attention=%s host=%s\n' "$_t_exit" "$_t_att" \
-    "$(_rn_meta "$_t_meta" host)"
+  _t_mv=-
+  [ "$_t_fin" = - ] || _t_mv=$(_rn_moved "$_t_dir/latest.heads")
+  printf ' exit=%s attention=%s host=%s moved=%s\n' "$_t_exit" "$_t_att" \
+    "$(_rn_meta "$_t_meta" host)" "$_t_mv"
 }
 
 # report_main [--porcelain]: every profile's latest run, in one place.
@@ -561,6 +607,26 @@ _rn_report_table() {
     [ -n "$_p_rows" ] || continue
     printf '\n== %s (%s)\n%s\n' "$_p_n" "$_p_v" "$_p_rows"
   done
+  _rn_report_moved "$1"
+}
+
+# _rn_report_moved <status-lines>: the footer. A stored run is what the
+# timer SAW; when its repos have moved since (a pull, a push, a fix made
+# by hand), say which, and the command that makes the report current.
+_rn_report_moved() {
+  _m_lines=$(printf '%s\n' "$1" | awk '{
+    for (i = 1; i <= NF; i++) {
+      k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v); f[k] = v
+    }
+    if (f["moved"] != "" && f["moved"] != "-") {
+      n = split(f["moved"], r, ",")
+      m = r[1]; for (j = 2; j <= n; j++) m = m ", " r[j]
+      printf "%s: %d repo(s) changed since its run (%s); refresh: " \
+        "muster run %s\n", f["profile"], n, m, f["profile"]
+    } }')
+  [ -n "$_m_lines" ] || return 0
+  printf '\n== changed since these runs\n%s\n' "$_m_lines"
+  printf '%s\n' "or refresh them all and act on what is safe: muster resolve"
 }
 
 _rn_render_attention() {   # <verb>: records on stdin
