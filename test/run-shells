@@ -1,0 +1,25 @@
+#!/bin/sh
+# test/run-shells - the WHOLE suite once per installed POSIX shell, with
+# muster run under that shell (MUSTER_SHELL, read by test/harness_lib).
+#
+# Not a *.t, so test/run does not pick it up: it multiplies the suite's
+# time by the number of shells, so it is run on purpose, before a
+# release or after touching anything shell-sensitive. WHY IT EXISTS: ksh
+# and zsh run the last part of a pipeline in the current shell, so an
+# `exit` there ends muster; placement printed nothing under ksh for days
+# because only three test files ran under more than one shell.
+#
+# Exit 0 only when every shell passed, and at least one ran.
+set -u
+_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+_rc=0 _ran='' _bad=''
+for _s in dash bash ksh mksh zsh yash posh; do
+  command -v "$_s" >/dev/null 2>&1 || continue
+  _ran="$_ran $_s"
+  printf '== under %s\n' "$_s"
+  if ! MUSTER_SHELL=$_s sh "$_dir/run"; then _rc=1; _bad="$_bad $_s"; fi
+done
+[ -n "$_ran" ] || { echo "FAIL run-shells: no shell found" >&2; exit 1; }
+printf 'shells run:%s\n' "$_ran"
+[ -z "$_bad" ] || printf 'FAILED under:%s\n' "$_bad" >&2
+exit "$_rc"

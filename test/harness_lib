@@ -10,6 +10,10 @@
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) \
   || { echo "FAIL $H_NAME: cannot find test/"; exit 1; }
 MUSTER=$HERE/../bin/muster
+# The real file, for the few tests that copy or link the binary itself
+# (how muster finds lib/ through a link): a wrapper there would test the
+# wrapper. MUSTER may become one below; MUSTER_REAL never does.
+MUSTER_REAL=$MUSTER
 
 # --- scratch, with the literal baked into the trap ---------------------------
 # The house rule: an rm -rf never runs on a deferred expansion. mktemp's
@@ -56,6 +60,30 @@ cat > "$GIT_CONFIG_GLOBAL" <<'EOF'
   detachedHead = false
 EOF
 ROOT=$_T/src
+
+# MUSTER_SHELL=<shell>: run muster under THAT shell for the whole file,
+# not the /bin/sh of its shebang. Every test calls "$MUSTER", so pointing
+# it at a wrapper reaches all of them, unedited. test/run-shells sets it
+# once per installed shell: ksh and zsh run the last part of a pipeline
+# in the current shell, and a bug of exactly that shape hid in placement
+# for days because only three files ran under more than one shell. The
+# shell is resolved NOW, before any test narrows PATH.
+if [ -n "${MUSTER_SHELL:-}" ]; then
+  _h_sh=$(command -v "$MUSTER_SHELL" 2>/dev/null) || _h_sh=
+  case $_h_sh in
+    /*) ;;
+    *) echo "FAIL $H_NAME: MUSTER_SHELL=$MUSTER_SHELL is not installed"
+       exit 1 ;;
+  esac
+  case $_h_sh$MUSTER_REAL in
+    *\'*) echo "FAIL $H_NAME: a quote in [$_h_sh] or [$MUSTER_REAL]"
+         exit 1 ;;
+  esac
+  printf '#!/bin/sh\nexec %s %s "$@"\n' "'$_h_sh'" "'$MUSTER_REAL'" \
+    > "$_T/muster-shell"
+  chmod +x "$_T/muster-shell"
+  MUSTER=$_T/muster-shell
+fi
 
 # CAN_LOCK: whether chmod 000 binds. As root it does not, and the
 # unreadable-state checks are skipped rather than reported as failures.
@@ -176,8 +204,10 @@ STUB
 h_verdict() {
   [ "$N" -gt 0 ] || fail "no checks ran"
   if [ -n "$FAILS" ]; then
-    printf 'FAIL %s (%s checks):%s\n' "$H_NAME" "$N" "$FAILS"
+    printf 'FAIL %s (%s checks)%s:%s\n' "$H_NAME" "$N" \
+      "${MUSTER_SHELL:+ under $MUSTER_SHELL}" "$FAILS"
     exit 1
   fi
-  printf 'ok   %s (%s checks)\n' "$H_NAME" "$N"
+  printf 'ok   %s (%s checks)%s\n' "$H_NAME" "$N" \
+    "${MUSTER_SHELL:+ under $MUSTER_SHELL}"
 }

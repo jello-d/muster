@@ -642,11 +642,11 @@ done
 
 # === installed by symlink, and with lib/ missing =============================
 mkdir -p "$_T/bin"
-ln -s "$MUSTER" "$_T/bin/muster"
+ln -s "$MUSTER_REAL" "$_T/bin/muster"
 OUT=$("$_T/bin/muster" survey --porcelain clean 2>/dev/null)
 expect clean state ok
 mkdir -p "$_T/orphan/bin"
-cp "$MUSTER" "$_T/orphan/bin/muster"
+cp "$MUSTER_REAL" "$_T/orphan/bin/muster"
 "$_T/orphan/bin/muster" survey >/dev/null 2>&1
 assert "lib/ missing: exit 2, not a crash mid-run" test "$?" = 2
 

@@ -643,3 +643,10 @@ there to reach a state a real tool will not produce on demand: a
 systemctl (the real user manager is never asked, and the unit directory
 is proven to be inside scratch first), a `cp` that corrupts a copy, and
 a `git` whose push reports success and sends nothing.
+
+`test/run-shells` runs the whole suite once per installed POSIX shell
+(dash, bash, ksh, mksh, zsh, yash, posh), with muster itself run under
+each (`MUSTER_SHELL=<shell> test/run` does one). It is not part of
+`test/run`, since it multiplies the time; run it after touching
+anything shell-sensitive. ksh and zsh run the last part of a pipeline
+in the current shell, which is the class of bug it exists for.

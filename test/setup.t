@@ -29,7 +29,8 @@ export NO_COLOR=1
 st() { stp "$PATH" "$@"; }
 stp() {
   _s_path=$1; shift
-  OUT=$(env PATH="$_s_path" sh "$SETUP" "$@" 2>"$_T/err" </dev/null)
+  OUT=$(env PATH="$_s_path" "${MUSTER_SHELL:-sh}" "$SETUP" "$@" \
+    2>"$_T/err" </dev/null)
   RC=$?
   ERR=$(cat "$_T/err")
 }
