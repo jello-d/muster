@@ -76,6 +76,8 @@ installs through.
     muster owed                   what each repo is owed (fetches first)
     muster catch-up --dry-run     what catch-up would do
     muster catch-up               fast-forward and safe-rebase the set
+    muster sync --dry-run         what an unattended sync would do now
+    muster sync                   fast-forward only what nobody is using
     muster resolve --dry-run      what resolve would do, and what needs you
     muster resolve                everything safe, then what needs you
     muster push                   what would be pushed, commit by commit
@@ -109,6 +111,32 @@ repo whose fetch failed is `fetch-failed`, its `ahead` and `behind` are
 on stderr. A fleet mixing ssh and https remotes, surveyed from a session
 with no ssh agent, fails exactly the ssh half, so this is the normal
 failure, not an edge case.
+
+### One knob: owed, sync, catch-up
+
+These three are NOT three features. They are three settings of one
+knob, "how much may muster do about a repo that is behind", and each
+runs the same judgement (owed's) and reports the same records:
+
+    owed       observe only. Moves nothing, ever
+    sync       the UNATTENDED setting: fast-forward only, and only a
+               repo nobody is using. What a timer should run
+    catch-up   the setting for when YOU ask: also rebases a diverged
+               repo when no file changed on both sides
+
+Each acting setting ends by judging again, so `sync` observes everything
+`owed` does: `owed` is `sync` with acting switched off. A profile picks
+the setting by naming the verb, so one timer does it all:
+
+    profile watch owed 15m      # report what is owed, touch nothing
+    profile watch sync 15m      # the same report, plus the safe pulls
+
+and a repo can be taken out of the knob's reach entirely with `hold`
+(see Configuration): observed by every setting, moved by none.
+
+`resolve` is not a fourth setting: it is the hands-on session (catch-up,
+place, refresh, then a list of what needs you), and `push` is the one
+action no setting ever takes on its own.
 
 ### owed
 
@@ -177,6 +205,36 @@ Exit 0 only
 when every repo ends owing nothing and every action succeeded.
 `ABORT-FAILED` or `REVERT-FAILED` in the result column means a repo was
 left mid-operation and needs a human now.
+
+### sync: the unattended setting
+
+    muster sync [--dry-run] [--porcelain] [name...]
+
+What a timer should run. It is catch-up with two rules swapped in,
+because nobody asked for this run, so it may only do what can surprise
+nobody:
+
+- It NEVER rebases. Diverged means local commits, which is somebody's
+  work: the record says `diverged` and leaves it.
+- It pulls only a QUIESCENT repo. Clean is not enough: clean says
+  nothing about a session about to edit, or a test run reading the
+  tree. The first of these that applies decides, and the action stays
+  `none`:
+
+      busy      a merge, rebase, cherry-pick, revert or bisect is open
+      unseen    /proc cannot say who is working, so it will not assume
+                that nobody is
+      in-use    a process of yours has its working directory inside the
+                repo (muster's own, and the shell that ran it, excepted)
+      touched   a tracked file was saved after HEAD last moved (a pull,
+                commit or checkout), even if its content is back to what
+                it was. Ignored files do not count: a build is not a
+                session
+
+Canonicals go first, under the same rules. A repo sync declines is
+still owed (`remaining`), so `report` and the banner say so, with the
+reason in `result`; declining is not a failure. Records and exit are
+catch-up's.
 
 ### resolve: everything safe, then what needs you
 
@@ -262,7 +320,8 @@ which repos.
     driver <systemd|external|manual>
     notify </absolute/path>
     profile <name> <verb> <interval> [driver=<d>] [<selector>...]
-        verb       survey, owed or catch-up
+        verb       survey, owed, sync or catch-up (sync and catch-up
+                   act, so two of them may not select the same repo)
         interval   30m, 2h, 1d; or - for a manual profile
         driver     WHO RUNS it: muster's own timers (systemd), the
                    integrator's scheduler calling `muster run` (external),
@@ -541,6 +600,15 @@ muster surveys every git repo one level under `~/src`.
                              the relpaths, AND one of the `requires`
                              paths when given (a repo with a hook of its
                              own has not adopted the vendored hook)
+    hold <name | /regex/>    the repo is OBSERVED by every verb and MOVED
+                             by none: behind, it is owed `held` rather
+                             than pull, rebase, skip or escalate, which
+                             is not attention. A repo kept behind on
+                             purpose, or someone else's clone. Held hides
+                             no problem: unpushed work is still owed a
+                             push, and an unfetchable one is `unknown`.
+                             The same selectors as a profile; `check`
+                             notes one that matches nothing here
 
 `MUSTER_ROOT` overrides `root`. An unknown directive is an error, not a
 skipped line.

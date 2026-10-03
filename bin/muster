@@ -77,8 +77,11 @@ commands:
   owed   [--porcelain] [--no-fetch] [name...]
          what each repo is owed to agree with origin and with the
          canonical copy of each vendored file: pull, rebase, push,
-         escalate, skip, reseed, redeploy, or unknown. Fetches first;
-         changes nothing else.
+         escalate, skip, held, reseed, redeploy, or unknown. Fetches
+         first; changes nothing else.
+  (owed, sync and catch-up are ONE KNOB, how much muster may do about a
+  repo that is behind: observe; fast-forward what nobody is using; also
+  rebase when you ask. A profile picks the setting by naming the verb)
   catch-up [--dry-run] [--porcelain] [name...]
          act on owed's pull and rebase verdicts: fast-forward, or
          rebase when no file changed on both sides, each verified after.
@@ -91,6 +94,12 @@ commands:
          upstream: never --force, never tags, never another branch;
          each push verified, then every profile re-run. A repo ahead
          AND behind is refused (resolve first)
+  sync   [--dry-run] [--porcelain] [name...]
+         the UNATTENDED setting of the knob owed and catch-up are on:
+         fast-forward only, and only a QUIESCENT repo (no git operation
+         open, no process of yours inside, no tracked file saved since
+         HEAD last moved). Never rebases. What it declines stays owed,
+         and says why: busy, in-use, touched, unseen, diverged
   resolve [--dry-run] [--push] [name...]
          everything SAFE, in order: catch-up (the canonical first), place
          (box-wide, so not when repos are named), then every profile
@@ -163,6 +172,7 @@ case ${1:-} in
   survey) shift; survey_main "$@" ;;
   owed) shift; owed_main "$@" ;;
   catch-up) shift; catchup_main "$@" ;;
+  sync) shift; sync_main "$@" ;;
   resolve) shift; resolve_main "$@" ;;
   push) shift; push_main "$@" ;;
   run) shift; run_main "$@" ;;

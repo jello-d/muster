@@ -424,6 +424,7 @@ _sv_cfg_lines() {
           && continue ;;
       expect)
         case $_k_b in unreadable|absent) continue ;; esac ;;
+      hold) _sv_cfg_selector "$_k_a" && [ -z "$_k_b" ] && continue ;;
     esac
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1
@@ -559,6 +560,27 @@ _sv_cfg_all() {   # <directive>: every value it is given, one per line
 }
 
 _sv_resolve() { (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P); }
+
+# _sv_held <name>: does a `hold` line name this repo? A held repo is
+# OBSERVED by every verb and MOVED by none (agreed with the user,
+# 2026-10-03): a repo kept behind on purpose, or someone else's clone.
+# The same selectors as a profile: a name, or a /regex/ matched in full.
+# A SUBSHELL ( ), never a group { }: ksh and zsh run the last part of a
+# pipeline in the CURRENT shell, so an `exit` in a { } there ends muster
+# itself (found by the five-shell parity tests, 2026-10-03).
+_sv_held() {
+  _sv_cfg_all hold | (
+    while IFS= read -r _h_s; do
+      case $_h_s in
+        /*/) _h_re=${_h_s#/}; _h_re=${_h_re%/}
+             printf '%s\n' "$1" | awk -v re="^($_h_re)\$" \
+               '$0 ~ re { f = 1 } END { exit !f }' && exit 0 ;;
+        *) [ "$_h_s" != "$1" ] || exit 0 ;;
+      esac
+    done
+    exit 1
+  )
+}
 
 # _sv_path_only: a record function that prints only the repo's resolved,
 # percent-encoded path, so a verb can ask "is this repo in the set?"

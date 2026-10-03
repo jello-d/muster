@@ -119,14 +119,112 @@ _cu_abort() {
   fi
 }
 
+# === sync: the unattended setting of the same knob ==========================
+# owed observes; catch-up does everything safe because a person asked;
+# sync does only what can surprise NOBODY, because nobody asked (agreed
+# with the user, 2026-10-03). It is catch-up with two rules swapped in:
+#
+#   - it never rebases: diverged means local commits, which is somebody's
+#     work, so the record says `diverged` and leaves it
+#   - it pulls only a QUIESCENT repo. Clean is not enough, because clean
+#     says nothing about a session that is about to edit, or a test run
+#     reading the tree. So, first that fails decides, action `none`:
+#       busy     a merge, rebase, cherry-pick, revert or bisect is open
+#       unseen   /proc cannot say who is working: refuse to assume nobody
+#       in-use   a process of this user has its working directory inside
+#       touched  a tracked file is newer than HEAD's last move, so it was
+#                saved after the last pull, commit or checkout, even if
+#                its content is back to what it was
+#
+# What a sync declined is not a failure; it is still owed (remaining), so
+# report and the banner say so. Canonicals go first, under the same rules.
+
+# _cu_cwds: every working directory of this user's processes, resolved,
+# one per line, LESS muster's own process tree and the chain that invoked
+# it (whoever ran `muster sync` from inside a repo asked for this run; the
+# shell it came from is not "a session in there"). Fails without /proc.
+_cu_cwds() {
+  [ -r /proc/self/stat ] || return 1
+  for _w_f in /proc/[0-9]*/stat; do
+    # Grouped: a process that exits mid-scan makes the < itself fail, and
+    # the shell reports that BEFORE a 2>/dev/null on the read applies.
+    { IFS= read -r _w_l < "$_w_f"; } 2>/dev/null || continue
+    _w_pid=${_w_f#/proc/}; _w_pid=${_w_pid%/stat}
+    # shellcheck disable=SC2086  # "state ppid ...", split on purpose
+    set -- ${_w_l##*') '}   # quoted: ksh cannot parse a bare ) here
+    printf '%s %s\n' "$_w_pid" "$2"
+  done | awk -v me="$$" '
+    { pp[$1] = $2; ids[NR] = $1 }
+    END {
+      for (p = me; p != "" && p > 1; p = pp[p]) skip[p] = 1
+      for (i = 1; i <= NR; i++) {
+        for (p = ids[i]; p != "" && p > 1; p = pp[p])
+          if (p == me) { skip[ids[i]] = 1; break }
+      }
+      for (i = 1; i <= NR; i++) if (!(ids[i] in skip)) print ids[i]
+    }' | while read -r _w_pid; do
+      readlink "/proc/$_w_pid/cwd" 2>/dev/null || :
+    done
+}
+
+# _cu_busy <path>: is a git operation open in it?
+_cu_busy() {
+  for _y_f in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG \
+      rebase-merge rebase-apply; do
+    _y_p=$(_sv_git "$1" rev-parse --git-path "$_y_f") || continue
+    case $_y_p in /*) ;; *) _y_p=$1/$_y_p ;; esac
+    [ ! -e "$_y_p" ] || return 0
+  done
+  return 1
+}
+
+# _cu_touched <path>: is a tracked file newer than HEAD's reflog? With no
+# reflog to compare against, it cannot tell, and says touched.
+_cu_touched() {
+  _t_log=$(_sv_git "$1" rev-parse --git-path logs/HEAD) || return 0
+  case $_t_log in /*) ;; *) _t_log=$1/$_t_log ;; esac
+  [ -f "$_t_log" ] || return 0
+  _t_new=$(cd "$1" && find . -path ./.git -prune -o -type f \
+    -newer "$_t_log" -print 2>/dev/null | sed 's|^\./||')
+  [ -n "$_t_new" ] || return 1
+  _sv_git "$1" -c core.quotePath=false ls-files \
+    | awk 'NR == FNR { t[$0] = 1; next } ($0 in t) { f = 1 }
+           END { exit !f }' - /dev/fd/3 3<<NEW
+$_t_new
+NEW
+}
+
+# _cu_sync_pull <path>: the pull, only if the repo is quiescent.
+_cu_sync_pull() {
+  if _cu_busy "$1"; then CU_RESULT=busy; return 0; fi
+  if [ -z "${CU_CWDS_OK:-}" ]; then CU_RESULT=unseen; return 0; fi
+  _q_r=$(_sv_resolve "$1")
+  if printf '%s\n' "$CU_CWDS" | awk -v r="$_q_r" \
+      '$0 == r || index($0, r "/") == 1 { f = 1 } END { exit !f }'; then
+    CU_RESULT=in-use; return 0
+  fi
+  if _cu_touched "$1"; then CU_RESULT=touched; return 0; fi
+  _cu_pull "$1"
+}
+
+# sync_main [--dry-run] [--porcelain] [name...]: catch-up's run, under
+# sync's rules. The processes are read once, before anything is judged.
+sync_main() {
+  CU_SYNC=1 CU_CWDS='' CU_CWDS_OK=''
+  if CU_CWDS=$(_cu_cwds); then CU_CWDS_OK=1; fi
+  catchup_main "$@"
+}
+
 # catchup_record <name> <path> [<deployed-path>]: judge, act, re-judge.
 catchup_record() {
   owed_record "$@" >/dev/null
   CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=-
   CU_OWED=$OW_LIST
   case ,$OW_LIST, in
-    *,pull,*) _cu_pull "$2" ;;
-    *,rebase,*) _cu_rebase "$2" ;;
+    *,pull,*) if [ -n "${CU_SYNC:-}" ]; then _cu_sync_pull "$2"
+              else _cu_pull "$2"; fi ;;
+    *,rebase,*) if [ -n "${CU_SYNC:-}" ]; then CU_RESULT=diverged
+                else _cu_rebase "$2"; fi ;;
   esac
   # Re-judged WITHOUT a fetch: the refs were fetched moments ago, and a
   # second fetch could move the goalposts the record is meant to report.
@@ -162,8 +260,11 @@ _cu_render() {
         bad = 1
         next
       }
-      rb = (f["remaining"] != "nothing") || (f["result"] != "-" &&
-        f["result"] != "ok" && f["result"] != "dry-run")
+      # held is not attention; a sync that declined (in-use, touched,
+      # busy, unseen, diverged) is not a FAILED action: what it left is in
+      # remaining, which is what flags it.
+      rb = (f["remaining"] != "nothing" && f["remaining"] != "held") ||
+        (f["result"] !~ /^(-|ok|dry-run|in-use|touched|busy|unseen|diverged)$/)
       if (rb) bad = 1
       if (mode == "porcelain") { print; next }
       if (mode == "flagged") { if (rb) print; next }
@@ -247,7 +348,8 @@ catchup_main() {
       --dry-run) CU_DRY=1 ;;
       -h|--help) usage; return 0 ;;
       --) shift; break ;;
-      -*) echo "muster catch-up: unknown option '$1'" >&2; return 2 ;;
+      -*) if [ -n "${CU_SYNC:-}" ]; then _c_v=sync; else _c_v=catch-up; fi
+          echo "muster $_c_v: unknown option '$1'" >&2; return 2 ;;
       *) break ;;
     esac
     shift

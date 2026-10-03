@@ -16,6 +16,8 @@
 #   diverged, files disjoint         -> rebase,push
 #   diverged, files overlapping      -> escalate   (touch nothing)
 #   dirty and behind                 -> skip       (never touch)
+#   behind, and named by a `hold`    -> held       (never touch; not
+#                                                   attention)
 #   ahead only                       -> push
 #   anything it could not establish  -> unknown    (state says why)
 #
@@ -57,7 +59,8 @@ _ow_overlap() {
     END { exit !found }'
 }
 
-# _ow_repo <path>: the git half of the ladder, from the survey's globals.
+# _ow_repo <path> <name>: the git half of the ladder, from the survey's
+# globals.
 _ow_repo() {
   # Declared and holding: nothing is owed. The state still shows.
   [ "$SV_STATE" != "$SV_EXPECT" ] || return 0
@@ -73,6 +76,11 @@ _ow_repo() {
     if _ow_has "$_r_f"; then _ow_add unknown; return 0; fi
   done
   _ow_has deployed-differs && _ow_add redeploy
+  # HELD: behind on purpose, so every verdict that would MOVE it (pull,
+  # rebase, and skip, escalate, which exist only because it is behind)
+  # is `held` instead, and no acting verb ever touches it. Not behind, it
+  # is judged as any repo: unpushed work is still owed a push.
+  if [ "$SV_BEHIND" -gt 0 ] && _sv_held "$2"; then _ow_add held; return 0; fi
   if [ "$SV_BEHIND" -gt 0 ] && _ow_has dirty; then _ow_add skip; return 0; fi
   if [ "$SV_BEHIND" -gt 0 ] && [ "$SV_AHEAD" -gt 0 ]; then
     _ow_diverged "$1"
@@ -227,7 +235,7 @@ ARTS
 owed_record() {
   survey_record "$@" >/dev/null
   OW_LIST='' OW_OVERLAP=-
-  _ow_repo "$2"
+  _ow_repo "$2" "$1"
   _ow_artifacts "$2"
   [ -n "$OW_LIST" ] || OW_LIST=nothing
   printf 'name=%s owed=%s state=%s ahead=%s behind=%s fetched=%s' \
@@ -281,7 +289,8 @@ _ow_render() {
         bad = 1
         next
       }
-      rb = (f["owed"] != "nothing")
+      # held alone is not attention: being behind is the point of it.
+      rb = (f["owed"] != "nothing" && f["owed"] != "held")
       if (rb) bad = 1
       if (mode == "porcelain") { print; next }
       if (mode == "flagged") { if (rb) print; next }

@@ -78,6 +78,18 @@ _ck_profile() {
     "${_p_names:-(none)}"
 }
 
+# _ck_holds: each `hold` selector that names no repo on this box, one a
+# line. A note, never a fault: a hold for a repo only another box has is
+# normal, and a typo is worth seeing.
+_ck_holds() {
+  _sv_cfg_all hold | while IFS= read -r _h_s; do
+    case $_h_s in
+      /*/) [ -n "$(_rn_expand "$_h_s")" ] || printf '%s\n' "$_h_s" ;;
+      *) if _ck_literal_missing "$_h_s"; then printf '%s\n' "$_h_s"; fi ;;
+    esac
+  done
+}
+
 # _ck_runs <status-line>: a driven profile whose runs are not happening,
 # or whose last run could not run, is a fault no install repairs.
 _ck_runs() {
@@ -110,6 +122,12 @@ check_main() {
   done <<PROFILES
 $_c_list
 PROFILES
+  _c_nh=$(_ck_holds)
+  while IFS= read -r _c_h; do
+    [ -z "$_c_h" ] || _ck_add note "hold       $_c_h matches no repo here"
+  done <<HOLDS
+$_c_nh
+HOLDS
   _c_ov=$(_rn_overlaps)
   while read -r _c_a _c_b _c_r; do
     [ -z "$_c_r" ] \

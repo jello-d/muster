@@ -37,8 +37,8 @@
 # to be a finding.
 
 # shellcheck disable=SC2034  # read by survey_lib's config check
-RUN_VERBS='survey owed catch-up'
-RUN_ACTING='catch-up'
+RUN_VERBS='survey owed catch-up sync'
+RUN_ACTING='catch-up sync'
 # THE DRIVER WHEN NONE IS DECLARED: manual (agreed 2026-10-01), so a
 # standalone muster is not nagged about timers nobody asked for, and
 # nothing is scheduled that was not declared. It was systemd for one
@@ -194,7 +194,8 @@ _rn_flagged() {
   case $1 in
     survey) _rn_r=_sv_render _rn_k='state' _rn_v=state ;;
     owed) _rn_r=_ow_render _rn_k='owed state' _rn_v=owed ;;
-    catch-up) _rn_r=_cu_render _rn_k='remaining result' _rn_v=remaining ;;
+    catch-up|sync) _rn_r=_cu_render _rn_k='remaining result' \
+      _rn_v=remaining ;;
   esac
   "$_rn_r" flagged < "$2" 2>/dev/null | awk -v keys="$_rn_k" \
     -v vk="$_rn_v" -v now="$(date +%s)" -v max="$RN_UNREACH_MAX" '{
@@ -729,6 +730,6 @@ _rn_render_attention() {   # <verb>: records on stdin
   case $1 in
     survey) _sv_render attention ;;
     owed) _ow_render attention ;;
-    catch-up) _cu_render attention ;;
+    catch-up|sync) _cu_render attention ;;
   esac || :
 }

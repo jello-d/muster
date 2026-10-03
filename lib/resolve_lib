@@ -127,7 +127,7 @@ _rs_owed_one() {
   _o_dry=$1; shift
   for _o_v in "$@"; do
     case $_o_v in
-      nothing) ;;
+      nothing|held) ;;
       pull|rebase) [ -n "$_o_dry" ] || _rs_need "$_o_v" \
         "$_o_n: still owed after catch-up; see: muster catch-up $_o_n" ;;
       push) _rs_need push "$_o_n: $(_st_field "$_o_r" ahead) unpushed" \
