@@ -57,7 +57,7 @@ _st_tree() {
 
 # stamp_record <name> <path> [<deployed>]: one stamp line.
 stamp_record() {
-  survey_record "$@" >/dev/null
+  survey_judge "$@"
   _r_tree=-
   case $SV_STATE in
     absent*|unreadable*|not-a-repo*|broken*) ;;
@@ -99,7 +99,7 @@ _st_check_one() {
   _c_head=$(_st_field "$1" head)
   _c_tree=$(_st_field "$1" tree)
   _c_uph=$(_st_field "$1" upstream_head)
-  survey_record "$_c_name" "$_c_path" >/dev/null
+  survey_judge "$_c_name" "$_c_path"
   _c_v=
   if _st_terminal "$SV_STATE"; then
     [ "$SV_STATE" = "$_c_state" ] || _c_v=gone

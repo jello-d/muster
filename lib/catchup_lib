@@ -215,9 +215,10 @@ sync_main() {
   catchup_main "$@"
 }
 
-# catchup_record <name> <path> [<deployed-path>]: judge, act, re-judge.
-catchup_record() {
-  owed_record "$@" >/dev/null
+# catchup_judge <name> <path> [<deployed>]: judge, act, re-judge, into
+# the CU_ globals, printing nothing; see survey_judge for why.
+catchup_judge() {
+  owed_judge "$@"
   CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=-
   CU_OWED=$OW_LIST
   case ,$OW_LIST, in
@@ -232,10 +233,15 @@ catchup_record() {
   if [ "$CU_ACTION" != none ] && [ -z "$CU_DRY" ]; then
     _c_fetch=${SV_DO_FETCH:-}
     SV_DO_FETCH=
-    owed_record "$@" >/dev/null
+    owed_judge "$@"
     SV_DO_FETCH=$_c_fetch
     CU_REMAINING=$OW_LIST
   fi
+}
+
+# catchup_record <name> <path> [<deployed-path>]: the same, as one line.
+catchup_record() {
+  catchup_judge "$@"
   printf 'name=%s action=%s result=%s from=%s to=%s' "$(_sv_esc "$1")" \
     "$CU_ACTION" "$CU_RESULT" "$(_sv_short "$CU_FROM")" \
     "$(_sv_short "$CU_TO")"
@@ -313,7 +319,7 @@ _cu_canon_first() {
     printf '%s\n' "$_p_set" | grep -qxF -- "$_p_key" || continue
     printf '%s' "$CU_PRE" | awk -v k="$_p_key" '$1 == k { f = 1 }
       END { exit !f }' && continue
-    catchup_record canonical "$_p_top" >/dev/null
+    catchup_judge canonical "$_p_top"
     CU_PRE="$CU_PRE$_p_key $CU_ACTION $CU_RESULT $(_sv_short "$CU_FROM")"
     CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED
 "
@@ -328,7 +334,7 @@ _cu_set_record() {
   if [ -z "$_s_pre" ]; then catchup_record "$@"; return; fi
   _s_fetch=${SV_DO_FETCH:-}
   SV_DO_FETCH=
-  owed_record "$@" >/dev/null
+  owed_judge "$@"
   SV_DO_FETCH=$_s_fetch
   # shellcheck disable=SC2086  # six space-free fields, split on purpose
   set -- "$1" "$2" $_s_pre

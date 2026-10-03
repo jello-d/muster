@@ -117,7 +117,7 @@ _ow_canon_status() {
   [ -f "$1" ] && [ -r "$1" ] || { echo unreadable; return 0; }
   _c_top=$(git -C "$(dirname -- "$1")" rev-parse --show-toplevel \
     2>/dev/null) || { echo not-in-a-repo; return 0; }
-  survey_record canonical "$_c_top" >/dev/null
+  survey_judge canonical "$_c_top"
   case $SV_STATE in
     ok|dirty) ;;
     *) echo "$SV_STATE"; return 0 ;;
@@ -232,12 +232,18 @@ ARTS
 
 # owed_record <name> <path> [<deployed-path>]: the survey's computation,
 # then the ladder on top of it. One line, every key.
-owed_record() {
-  survey_record "$@" >/dev/null
+# owed_judge <name> <path> [<deployed>]: the verdicts into OW_LIST (and
+# the SV_ facts), printing nothing; see survey_judge for why.
+owed_judge() {
+  survey_judge "$@"
   OW_LIST='' OW_OVERLAP=-
   _ow_repo "$2" "$1"
   _ow_artifacts "$2"
   [ -n "$OW_LIST" ] || OW_LIST=nothing
+}
+
+owed_record() {
+  owed_judge "$@"
   printf 'name=%s owed=%s state=%s ahead=%s behind=%s fetched=%s' \
     "$(_sv_esc "$1")" "$OW_LIST" "$SV_STATE" "$SV_AHEAD" "$SV_BEHIND" \
     "$SV_FETCHED"

@@ -244,7 +244,14 @@ _sv_short() {   # <sha or word> -> 12-char sha, or the word unchanged
 }
 
 # survey_record <name> <path> [<deployed-path>]: one line, every key.
-survey_record() {
+# survey_judge <name> <path> [<deployed>]: the judgement, into the SV_
+# globals, printing NOTHING. Verbs that need the facts and not the line
+# call this, never `survey_record ... >/dev/null`: under ksh 93u+m that
+# redirect around a function, with a redirected builtin inside it (a
+# `command -v x >/dev/null`), leaves the CALLER'S stdout on /dev/null when
+# it all runs inside $(...), and the records vanished (found 2026-10-03 by
+# the whole suite run under ksh: owed and catch-up saw no repos at all).
+survey_judge() {
   _sv_reset
   SV_EXPECT=$(_sv_cfg expect "$1") || SV_EXPECT=-
   SV_STATE=$(_sv_where "$2")
@@ -267,6 +274,11 @@ survey_record() {
       *) SV_STATE=$SV_STATE,expect-mismatch ;;
     esac
   fi
+}
+
+# survey_record <name> <path> [<deployed>]: the judgement, as one line.
+survey_record() {
+  survey_judge "$@"
   printf 'name=%s state=%s branch=%s head=%s upstream=%s' \
     "$(_sv_esc "$1")" "$SV_STATE" "$SV_BRANCH" "$(_sv_short "$SV_HEAD")" \
     "$SV_UP"
