@@ -76,6 +76,8 @@ installs through.
     muster owed                   what each repo is owed (fetches first)
     muster catch-up --dry-run     what catch-up would do
     muster catch-up               fast-forward and safe-rebase the set
+    muster resolve --dry-run      what resolve would do, and what needs you
+    muster resolve                everything safe, then what needs you
     muster run <profile>          run a profile and store the result
     muster report                 every profile's latest run, in one view
     muster schedule install       systemd user timers for the profiles
@@ -168,10 +170,57 @@ It NEVER pushes, and never touches a repo owed `skip`, `escalate`,
 afterwards, so the `remaining` field says what is still owed (a rebased
 repo still owes its `push`).
 
-Record: `name action result from to owed remaining path`. Exit 0 only
+Record: `name action result from to owed remaining state fetched path`.
+Exit 0 only
 when every repo ends owing nothing and every action succeeded.
 `ABORT-FAILED` or `REVERT-FAILED` in the result column means a repo was
 left mid-operation and needs a human now.
+
+### resolve: everything safe, then what needs you
+
+    muster resolve [--dry-run] [name...]
+
+The one command to run when something is red. In order:
+
+1. **repos**: `catch-up`, the canonical first, then fast-forward, or
+   rebase where no file changed on both sides.
+2. **config**: `place` (box-wide, so skipped when repos are named).
+3. **refresh**: every profile is re-run, so `report` and the notifier
+   say what is true now rather than what the last timer saw.
+4. **needs you**: read fresh, after acting, one line each with the
+   exact next command.
+
+It adds no action of its own: each step is the verb above, so resolve
+cannot drift from them. It holds the box lock while acting, so a timer
+cannot act on the same repos mid-way. It NEVER pushes (an unpushed
+commit may be another session's work), merges by hand, touches a dirty
+tree, folds a live edit into the source, decides a conflict or clears a
+displaced edit: those are the list. Exit 0 nothing needs you, 1
+something does, 2 a step could not run.
+
+    push         unpushed commits: review, then git -C <repo> push
+    escalate     both sides changed the same files: merge by hand
+    skip         uncommitted work, and behind: commit or stash, resolve
+    unknown      could not fetch (locked keyring, no agent): log in,
+                 or use ssh -A, then resolve
+    reseed       a vendored copy differs: the integrator's notes sweep
+    redeploy     a deployed clone differs: the integrator's pin sweep
+    merge-back   a live edit not in the source: review (muster where),
+                 then muster merge-back <path>, and commit
+    capture      an application's file not in the source: review, then
+                 muster capture <path>, and commit
+    conflict     changed live AND in the source: decide which wins
+    displaced    a repo-owned edit kept aside: salvage it, then
+                 muster displaced clear <run> <path>
+    source-link, foreign, linked-dir, shadowed
+                 a shape muster will not act on: fix the source or link
+
+WHEN THE BANNER FIRES: `muster report` shows what the timer saw (instant,
+no network); `muster resolve --dry-run` shows what can be done and what
+cannot; `muster resolve` does it. A fix made by hand shows in `report`
+only after the next run: `muster run <profile>`, or `resolve`, which
+re-runs them all. `muster check` is the deeper question, whether muster
+itself is healthy here, and is where config faults show without a run.
 
 ### Profiles, run and report
 

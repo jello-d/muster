@@ -1,0 +1,266 @@
+# shellcheck shell=sh
+# resolve_lib - `muster resolve`: do everything that is SAFE, in the order
+# that makes each step's verdict true, then list what is left for a
+# person, each with the exact next command.
+#
+# Sourced by bin/muster, never executed. Agreed with the user 2026-10-02.
+# It adds NO new action: every step is an existing verb, run as its own
+# process exactly as `run` runs them, so there is one implementation of
+# each and `resolve` cannot drift from them:
+#
+#   1. repos    catch-up: the canonical first, then fast-forward, or
+#               rebase where no file changed on both sides
+#   2. config   place: new and changed source, migrations (skipped when
+#               repos are named: placement is box-wide, not per repo)
+#   3. refresh  run every profile, so `report` and the notifier say what
+#               is true NOW (found live: a manual catch-up left report
+#               red until the next timer, up to an hour)
+#   4. needs you  read FRESH from owed and placed, after acting: what is
+#               left is what is true, never a prediction
+#
+# NEVER: push (an unpushed commit may be another session's work), merge
+# by hand, touch a dirty tree, fold a live edit into the source, decide a
+# conflict, clear a displaced edit. Those are the "needs you" list.
+#
+# Steps 1 and 2 hold the box lock, so a timer cannot act on the same
+# repos mid-way; it is released before step 3, whose runs take it.
+#
+# Exit: 0 nothing needs you, 1 something does, 2 a step could not run.
+
+_rs_need() {   # <kind> <words...>: one line on the "needs you" list
+  _n_k=$1; shift
+  RS_NEED="${RS_NEED}$(printf '%-10s %s' "$_n_k" "$*")
+"
+}
+
+# _rs_repos <dry> [name...]: step 1, every action catch-up took, one line.
+_rs_repos() {
+  _r_dry=$1; shift
+  echo "== repos"
+  _r_rc=0
+  _r_out=$("$MUSTER_BIN" catch-up --porcelain ${_r_dry:+--dry-run} -- "$@" \
+    </dev/null) || _r_rc=$?
+  if [ "$_r_rc" -ge 2 ]; then
+    echo "FAILED     catch-up could not run (exit $_r_rc)"; RS_BROKE=1
+    return 0
+  fi
+  _r_any=
+  while IFS= read -r _r_rec; do
+    [ -n "$_r_rec" ] || continue
+    # A FAILED FETCH is known only here: step 4 reads without fetching,
+    # and a stale ref there answers "owes nothing" (found by the tests).
+    # So the fetch outcome is taken from catch-up's record, and step 4
+    # skips the repo rather than vouching for it.
+    case ,$(_st_field "$_r_rec" state), in
+      *,fetch-failed,*)
+        _r_fn=$(_st_unesc "$(_st_field "$_r_rec" name)")
+        RS_UNFETCHED="$RS_UNFETCHED $_r_fn "
+        _rs_need unknown "$_r_fn: could not fetch (a locked keyring, or" \
+          "no agent); log in or use ssh -A, then: muster resolve $_r_fn" ;;
+    esac
+    _r_a=$(_st_field "$_r_rec" action)
+    [ "$_r_a" != none ] || continue
+    _r_any=1
+    _r_n=$(_st_unesc "$(_st_field "$_r_rec" name)")
+    _r_res=$(_st_field "$_r_rec" result)
+    case $_r_a in pull) _r_did=pulled ;; *) _r_did=${_r_a}d ;; esac
+    case $_r_res in
+      ok) printf '%-10s %s  %s..%s\n' "$_r_did" "$_r_n" \
+            "$(_st_field "$_r_rec" from)" "$(_st_field "$_r_rec" to)" ;;
+      dry-run) printf 'would %-4s %s\n' "$_r_a" "$_r_n" ;;
+      *) printf 'FAILED     %s %s: %s\n' "$_r_a" "$_r_n" "$_r_res"
+         _rs_need "$_r_a" "$_r_n: catch-up says $_r_res (git's reason is" \
+           "above); look at $(_st_unesc "$(_st_field "$_r_rec" path)")" ;;
+    esac
+  done <<RECORDS
+$_r_out
+RECORDS
+  [ -n "$_r_any" ] || echo "nothing to pull or rebase"
+}
+
+# _rs_config <dry>: step 2, place, its own lines shown as they are.
+_rs_config() {
+  printf '\n== config\n'
+  _c_rc=0
+  _c_out=$("$MUSTER_BIN" place ${1:+--dry-run} </dev/null) || _c_rc=$?
+  if [ -n "$_c_out" ]; then printf '%s\n' "$_c_out"
+  else echo "nothing to place"
+  fi
+  # 2 is a write that failed or was refused, already named above; the
+  # placed records below say what is left, so it is not a broken run.
+  [ "$_c_rc" -le 2 ] || RS_BROKE=1
+}
+
+# _rs_refresh: step 3, every profile re-run, so report is current.
+_rs_refresh() {
+  printf '\n== refreshed\n'
+  _f_list=$(run_profiles)
+  [ -n "$_f_list" ] || { echo "no profiles declared"; return 0; }
+  while read -r _f_n _f_rest; do
+    [ -n "$_f_n" ] || continue
+    _f_rc=0
+    "$MUSTER_BIN" run "$_f_n" >/dev/null 2>&1 </dev/null || _f_rc=$?
+    case $_f_rc in
+      0) printf '%-10s %s\n' ok "$_f_n" ;;
+      1) printf '%-10s %s\n' attention "$_f_n" ;;
+      *) printf '%-10s %s (exit %s; see muster report)\n' FAILED "$_f_n" \
+           "$_f_rc"; RS_BROKE=1 ;;
+    esac
+  done <<PROFILES
+$_f_list
+PROFILES
+}
+
+# _rs_owed_one <dry> <record>: what one repo's leftover owed needs.
+_rs_owed_one() {
+  _o_r=$2   # kept: the `set --` below replaces the positional parameters
+  _o_n=$(_st_unesc "$(_st_field "$2" name)")
+  _o_p=$(_st_unesc "$(_st_field "$2" path)")
+  _o_st=$(_st_field "$2" state)
+  _o_old=$IFS; IFS=,
+  # shellcheck disable=SC2046  # the owed list, split on commas
+  set -- "$1" $(_st_field "$2" owed)
+  IFS=$_o_old
+  _o_dry=$1; shift
+  for _o_v in "$@"; do
+    case $_o_v in
+      nothing) ;;
+      pull|rebase) [ -n "$_o_dry" ] || _rs_need "$_o_v" \
+        "$_o_n: still owed after catch-up; see: muster catch-up $_o_n" ;;
+      push) _rs_need push "$_o_n: $(_st_field "$_o_r" ahead) unpushed" \
+        "commit(s), maybe someone's work in progress; review, then:" \
+        "git -C $_o_p push" ;;
+      escalate) _rs_need escalate "$_o_n: both sides changed" \
+        "$(_st_unesc "$(_st_field "$_o_r" overlap)"); merge by hand in $_o_p" ;;
+      skip) _rs_need skip "$_o_n: uncommitted work, and behind" \
+        "$(_st_field "$_o_r" behind); commit or stash, then: muster resolve" \
+        "$_o_n" ;;
+      unknown) case ,$_o_st, in
+          *,fetch-failed,*) _rs_need unknown "$_o_n: could not fetch (a" \
+            "locked keyring, or no agent); log in or use ssh -A, then:" \
+            "muster resolve $_o_n" ;;
+          *) _rs_need unknown "$_o_n: could not be judged ($_o_st); see:" \
+            "muster owed $_o_n" ;;
+        esac ;;
+      reseed) _rs_need reseed "$_o_n: a vendored copy differs from its" \
+        "canonical; re-seed it (the integrator's notes sweep)" ;;
+      redeploy) _rs_need redeploy "$_o_n: its deployed clone differs" \
+        "from origin; redeploy it (the integrator's pin sweep)" ;;
+      *) _rs_need "$_o_v" "$_o_n: see: muster owed $_o_n" ;;
+    esac
+  done
+}
+
+# _rs_owed_needs <dry> [name...]: step 4 for repos, read fresh. No fetch:
+# catch-up fetched moments ago, and a second fetch could move the state
+# this list is meant to describe.
+_rs_owed_needs() {
+  _w_dry=$1; shift
+  _w_out=$("$MUSTER_BIN" owed --porcelain --no-fetch -- "$@" </dev/null) \
+    || :
+  while IFS= read -r _w_rec; do
+    [ -n "$_w_rec" ] || continue
+    case $RS_UNFETCHED in
+      *" $(_st_unesc "$(_st_field "$_w_rec" name)") "*) continue ;;
+    esac
+    _rs_owed_one "$_w_dry" "$_w_rec"
+  done <<RECORDS
+$_w_out
+RECORDS
+}
+
+# _rs_place_one <dry> <verdict> <path>: what one placed file needs.
+_rs_place_one() {
+  case $2 in
+    in-sync|app-held|unmanaged) ;;
+    merge-back) _rs_need merge-back "$3: a live edit not yet in the" \
+      "source; review it (muster where $3), then: muster merge-back $3" ;;
+    capture) _rs_need capture "$3: an application's file not yet in the" \
+      "source; review it, then: muster capture $3" ;;
+    conflict) _rs_need conflict "$3: changed live AND in the source;" \
+      "decide which wins (muster where $3)" ;;
+    source-link) _rs_need "$2" "$3: its source is a symlink, never placed;" \
+      "make it a file, or move it out of the root" ;;
+    foreign|linked-dir) _rs_need "$2" "$3: a link to somewhere else, not" \
+      "muster's to touch; remove it, or change the source" ;;
+    shadowed) _rs_need shadowed "$3: a more specific root owns this" \
+      "path; remove it from one of the two sources" ;;
+    read-only) _rs_need read-only "$3: not writable by you; reported" \
+      "only" ;;
+    *) [ -n "$1" ] || _rs_need "$2" "$3: still $2 after place (see" \
+      "config above)" ;;
+  esac
+}
+
+# _rs_place_needs <dry>: step 4 for config, plus displaced edits.
+_rs_place_needs() {
+  _p_out=$("$MUSTER_BIN" placed --porcelain </dev/null) || :
+  while IFS= read -r _p_rec; do
+    [ -n "$_p_rec" ] || continue
+    _rs_place_one "$1" "$(_st_field "$_p_rec" verdict)" \
+      "$(_st_unesc "$(_st_field "$_p_rec" path)")"
+  done <<RECORDS
+$_p_out
+RECORDS
+  _p_disp=$("$MUSTER_BIN" displaced list </dev/null) || :
+  while read -r _p_run _p_path; do
+    [ -n "$_p_path" ] || continue
+    _rs_need displaced "$_p_path: a repo-owned edit kept aside; salvage" \
+      "it, then: muster displaced clear $_p_run $_p_path"
+  done <<DISPLACED
+$_p_disp
+DISPLACED
+}
+
+# _rs_act <dry> [name...]: steps 1 and 2, under the box lock.
+_rs_act() {
+  _a_box=$(_rn_state_dir)/.box-lock
+  case $_a_box in
+    *\'*) echo "muster: unusable state dir [$_a_box]" >&2; return 2 ;;
+  esac
+  mkdir -p "$(_rn_state_dir)" || return 2
+  if ! _rn_box_lock "$_a_box"; then
+    echo "muster: another muster run held this box for" \
+      "${MUSTER_RUN_WAIT:-600}s; resolve did not run" >&2
+    return 2
+  fi
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$_a_box/pid'; rmdir '$_a_box' 2>/dev/null" EXIT
+  _rs_repos "$@"
+  _a_dry=$1; shift
+  if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then _rs_config "$_a_dry"; fi
+  rm -f "$_a_box/pid"
+  rmdir "$_a_box" 2>/dev/null || :
+  trap - EXIT
+}
+
+resolve_main() {
+  _m_dry=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --dry-run) _m_dry=1 ;;
+      -h|--help) usage; return 0 ;;
+      --) shift; break ;;
+      -*) echo "muster resolve: unknown option '$1'" >&2; return 2 ;;
+      *) break ;;
+    esac
+    shift
+  done
+  survey_config || return 2
+  RS_NEED='' RS_BROKE='' RS_UNFETCHED=''
+  _rs_act "$_m_dry" "$@" || return 2
+  [ -n "$_m_dry" ] || _rs_refresh
+  _rs_owed_needs "$_m_dry" "$@"
+  if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then
+    _rs_place_needs "$_m_dry"
+  fi
+  if [ -n "$RS_NEED" ]; then
+    printf '\n== needs you (%s)\n%s' \
+      "$(printf '%s' "$RS_NEED" | grep -c .)" "$RS_NEED"
+  else
+    printf '\n== nothing needs you\n'
+  fi
+  if [ -n "$RS_BROKE" ]; then return 2; fi
+  if [ -n "$RS_NEED" ]; then return 1; fi
+  return 0
+}

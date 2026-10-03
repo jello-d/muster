@@ -54,6 +54,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/place_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/place_lib
 . "$MUSTER_LIB/place_lib"
+[ -f "$MUSTER_LIB/resolve_lib" ] \
+  || { echo "muster: $MUSTER_LIB/resolve_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/resolve_lib
+. "$MUSTER_LIB/resolve_lib"
 # The resolved path of this command, so a stored run re-enters it.
 MUSTER_BIN=$(CDPATH='' cd -- "$(dirname -- "$_self")" && pwd -P)/${_self##*/}
 
@@ -75,6 +79,12 @@ commands:
          act on owed's pull and rebase verdicts: fast-forward, or
          rebase when no file changed on both sides, each verified after.
          Touches nothing else, and never pushes.
+  resolve [--dry-run] [name...]
+         everything SAFE, in order: catch-up (the canonical first), place
+         (box-wide, so not when repos are named), then every profile
+         re-run so report is current. Then what NEEDS YOU, read fresh,
+         each with its next command: push, escalate, dirty, unfetchable,
+         merge-back, capture, conflict, displaced. Never pushes
   run    <profile>
          run a declared profile and store its records under
          ~/.local/state/muster/<profile>; what timers call
@@ -122,6 +132,7 @@ case ${1:-} in
   survey) shift; survey_main "$@" ;;
   owed) shift; owed_main "$@" ;;
   catch-up) shift; catchup_main "$@" ;;
+  resolve) shift; resolve_main "$@" ;;
   run) shift; run_main "$@" ;;
   report) shift; report_main "$@" ;;
   schedule) shift; schedule_main "$@" ;;
