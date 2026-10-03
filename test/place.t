@@ -902,4 +902,18 @@ assert "diff, named: an app-held file is shown" \
 act diff "$DST/no/such/file"
 expect_rc 2 "diff: a path under no managed file"
 
+# === every POSIX shell reads placement the same ===========================
+# ksh and zsh run the last part of a pipeline in the CURRENT shell, so an
+# `exit` in a `| { }` group there ended muster itself: under ksh `placed`
+# printed NO rows and exited 0, an all-clear over config it never read
+# (live on a real config with a capture dir and a nested root, found
+# 2026-10-03). This tree has both, so every shell must agree with sh.
+_base=$("$MUSTER" placed --porcelain 2>&1)
+assert "parity: the base has rows to compare" has "$_base" "path="
+for _sh in dash bash ksh mksh zsh; do
+  command -v "$_sh" >/dev/null 2>&1 || continue
+  _o=$("$_sh" "$MUSTER" placed --porcelain 2>&1)
+  assert "$_sh: the same placement records as sh" test "$_o" = "$_base"
+done
+
 h_verdict

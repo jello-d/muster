@@ -142,12 +142,12 @@ _pl_owned_elsewhere() {   # <dest> <inner-roots>: under a more specific root?
   # The loop must FAIL when nothing matched: a while loop's status is its
   # last command's, and a non-matching `case` succeeds (found by the
   # tests: every file read as owned elsewhere).
-  printf '%s\n' "$2" | {
+  printf '%s\n' "$2" | (
     while IFS= read -r _o_r; do
       case $1 in "$_o_r"/*) exit 0 ;; esac
     done
     exit 1
-  }
+  )
 }
 
 # _pl_captures: every `capture` directory, tilde-expanded, no trailing /.
@@ -155,12 +155,12 @@ _pl_captures() { _sv_cfg_all capture | while IFS= read -r _a_c; do
   _sv_tilde "$_a_c" | sed 's|/*$||'; echo; done | grep . || :; }
 
 _pl_in_capture() {   # <dest>: under a `capture` directory?
-  _pl_captures | {
+  _pl_captures | (
     while IFS= read -r _c_d; do
       case $1 in "$_c_d"/*) exit 0 ;; esac
     done
     exit 1
-  }
+  )
 }
 
 # _pl_captured_live <dest-root>: live files under the capture directories
@@ -273,12 +273,12 @@ _pl_capture_file() {
   # Explicit exits: a loop that finds nothing must not report a match (the
   # same trap as _pl_owned_elsewhere: a while loop's status is its last
   # command's).
-  _sv_cfg_all policy | {
+  _sv_cfg_all policy | (
     while IFS= read -r _f_p; do
       [ "$(_sv_tilde "$_f_p")" != "$1" ] || exit 1
     done
     exit 0
-  }
+  )
 }
 
 # _pl_capture_v <source?> <baseline?> <live?>: a capture directory. Like

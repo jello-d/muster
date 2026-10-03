@@ -118,7 +118,7 @@ _pu_one() {
 
 # _pu_act <candidates>: push each, the commit listed for it.
 _pu_act() {
-  printf '%s\n' "$1" | {
+  printf '%s\n' "$1" | (
     _a_bad=0
     while read -r _a_en _a_ep; do
       [ -n "$_a_en" ] || continue
@@ -129,7 +129,7 @@ _pu_act() {
       _pu_one "$_a_n" "$_a_p" "$_a_sha" || _a_bad=1
     done
     exit "$_a_bad"
-  }
+  )
 }
 
 # _pu_run <act?> [name...]: judge (fetching), list or push, refuse aloud.

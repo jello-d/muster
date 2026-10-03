@@ -179,4 +179,27 @@ assert "resolve --push: and the list is empty after" \
   has "$OUT" "== nothing needs you"
 assert "the box is free after" test ! -e "$S/.box-lock"
 
+# === every POSIX shell finishes the run ====================================
+# Under ksh and zsh an `exit` in the last part of a pipeline ends the
+# shell: the batch loop pushed every repo, then its closing `exit` ended
+# muster, skipping the profile refresh and turning a FAILED push's exit
+# 2 into the loop's 1.
+mkrepo kb1
+commit_file "$ROOT/kb1" a "k1" "pushes fine"
+mkrepo kb2
+commit_file "$ROOT/kb2" a "k2" "refused by its hook"
+printf '#!/bin/sh\nexit 1\n' > "$ROOT/kb2/.git/hooks/pre-push"
+chmod +x "$ROOT/kb2/.git/hooks/pre-push"
+for _sh in ksh mksh zsh; do
+  command -v "$_sh" >/dev/null 2>&1 || continue
+  touch -t 202001010000 "$S/p/latest.meta"
+  "$_sh" "$MUSTER" push kb1 kb2 >/dev/null 2>&1 </dev/null; RC=$?
+  expect_rc 2 "$_sh: a batch with a failed push exits 2"
+  assert "$_sh: the batch went" \
+    test "$(origin_head kb1)" = "$(head_of "$ROOT/kb1")"
+  assert "$_sh: and the profiles were re-run after it" \
+    test "$S/p/latest.meta" -nt "$ROOT/kb1/a"
+  break
+done
+
 h_verdict
