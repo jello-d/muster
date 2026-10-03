@@ -16,12 +16,6 @@ owed() {
   RC=$?
   ERR=$(cat "$_T/err")
 }
-commit_file() {   # <repo> <file> <content> <message>
-  mkdir -p "$(dirname -- "$1/$2")"
-  printf '%s\n' "$3" > "$1/$2"
-  g "$1" add -- "$2"
-  g "$1" commit -m "$4"
-}
 
 # === the ladder ==============================================================
 

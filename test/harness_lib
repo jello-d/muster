@@ -98,6 +98,7 @@ expect_rc() {   # <want> <context>
 }
 has() { case $1 in *"$2"*) return 0 ;; esac; return 1; }
 starts() { case $1 in "$2"*) return 0 ;; esac; return 1; }
+lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 g() { _g_r=$1; shift; git -C "$_g_r" "$@" >/dev/null 2>&1; }
 
 # mkrepo <name>: a clone of its own bare origin, one commit, tracking it.
@@ -109,6 +110,17 @@ mkrepo() {
   g "$ROOT/$1" commit -m one
   g "$ROOT/$1" push -u origin main
 }
+# commit_file <repo> <file> <content> <message>: one commit, its parent
+# directories made as needed.
+commit_file() {
+  mkdir -p "$(dirname -- "$1/$2")"
+  printf '%s\n' "$3" > "$1/$2"
+  g "$1" add -- "$2"
+  g "$1" commit -m "$4"
+}
+head_of() { git -C "$1" rev-parse HEAD; }
+# origin_head <name>: main on the bare origin mkrepo made for it.
+origin_head() { git --git-dir="$_T/origins/$1.git" rev-parse main; }
 # upstream_moves <name>: another clone pushes a commit; this one has not
 # fetched it.
 upstream_moves() {

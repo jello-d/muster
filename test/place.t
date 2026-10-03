@@ -53,7 +53,6 @@ expv() {   # <dest path> <verdict>: one check
   [ "$_e_got" = "$2" ] || fail "${1#"$DST"/}: verdict [$_e_got], want [$2]"
 }
 same() { cmp -s "$1" "$2"; }
-lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 # === before anything is placed ===============================================

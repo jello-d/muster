@@ -27,7 +27,6 @@ pfield() {   # <profile> <key>: from report --porcelain in OUT
   printf '%s\n' "$OUT" | awk -v p="profile=$1" '$1 == p' | tr ' ' '\n' \
     | sed -n "s/^$2=//p"
 }
-lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 meta() { sed -n "s/^$2=//p" "$S/$1/latest.meta"; }
 nhist() { find "$S/$1/history" -name '*.meta' | wc -l | tr -d ' '; }
 

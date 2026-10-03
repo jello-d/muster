@@ -17,15 +17,7 @@ catchup() {
   RC=$?
   ERR=$(cat "$_T/err")
 }
-commit_file() {   # <repo> <file> <content> <message>
-  mkdir -p "$(dirname -- "$1/$2")"
-  printf '%s\n' "$3" > "$1/$2"
-  g "$1" add -- "$2"
-  g "$1" commit -m "$4"
-}
-head_of() { git -C "$1" rev-parse HEAD; }
 short() { printf '%.12s' "$1"; }
-origin_head() { git --git-dir="$_T/origins/$1.git" rev-parse main; }
 
 # === pull: a fast-forward, landing exactly on the upstream ==================
 mkrepo behind

@@ -20,14 +20,6 @@ pu() {   # [args...]: push, into OUT / ERR / RC
   RC=$?
   ERR=$(cat "$_T/err")
 }
-commit_file() {   # <repo> <file> <content> <message>
-  printf '%s\n' "$3" > "$1/$2"
-  g "$1" add -- "$2"
-  g "$1" commit -m "$4"
-}
-head_of() { git -C "$1" rev-parse HEAD; }
-origin_head() { git --git-dir="$_T/origins/$1.git" rev-parse main; }
-lacks() { case $1 in *"$2"*) return 1 ;; esac; }
 
 mkrepo ahead1
 commit_file "$ROOT/ahead1" a "one" "first local commit"
