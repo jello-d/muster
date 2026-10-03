@@ -335,9 +335,10 @@ stored. The commands:
 
 Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),
 `place`, `converged`, `migrate` (a symlink into its own source becomes a
-copy), `migrate-dir` (a whole-directory link into its own source
-becomes a real directory; files the link showed that are not source are
-kept as unmanaged copies and named; refused, with the link left as it
+copy), `migrate-dir` (a whole-directory link into its own source,
+the destination root itself included, becomes a real directory; files
+the link showed that are not source are kept as unmanaged copies and
+named; refused, with the link left as it
 was, while it shows a symlink, which a copy would drop), `merge-back`,
 `capture`,
 `displace`, `orphan`, `app-held`, `conflict`, `shadowed`, `foreign`,

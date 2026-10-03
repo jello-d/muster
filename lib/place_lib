@@ -205,7 +205,7 @@ _pl_verdict() {
   if _pl_under_link "$PL_D" "$2"; then
     # Its OWN source directory: migratable (P12). Anything else: not ours.
     if [ "$(readlink -f -- "$PL_LDIR" 2>/dev/null)" \
-      = "$(readlink -f -- "$1/${PL_LDIR#"$2"/}" 2>/dev/null)" ]; then
+      = "$(readlink -f -- "$(_pl_ldir_src "$1" "$2")" 2>/dev/null)" ]; then
       PL_V=migrate-dir
     else
       PL_V=linked-dir
@@ -305,18 +305,31 @@ _pl_capture_v() {
   [ "$PL_V" != merge-back ] || PL_V=capture
 }
 
-# _pl_under_link <dest> <dest-root>: is any directory BETWEEN the root and
-# the file a symlink? Sets PL_LDIR to the OUTERMOST such directory. Then
-# the "live" file is another file seen through it (found live: a
-# whole-directory link made its file read as converged, which would have
-# recorded a baseline for a file still linked to source).
+# _pl_under_link <dest> <dest-root>: is any directory between the file
+# and the root, THE ROOT INCLUDED, a symlink? Sets PL_LDIR to the
+# OUTERMOST such directory. Then the "live" file is another file seen
+# through it (found live: a whole-directory link made its file read as
+# converged, which would have recorded a baseline for a file still linked
+# to source). The root counts too (T12, found by the integrator): a root
+# that is itself a link into its source read every file in-sync, the
+# same inode on both sides, and reported green over a tree it never
+# placed. It migrates like any directory link.
 _pl_under_link() {
   _u_d=$(dirname -- "$1") PL_LDIR=
-  while [ "$_u_d" != "$2" ] && [ "$_u_d" != / ] && [ "$_u_d" != . ]; do
+  while :; do
     [ ! -h "$_u_d" ] || PL_LDIR=$_u_d
+    [ "$_u_d" != "$2" ] && [ "$_u_d" != / ] && [ "$_u_d" != . ] || break
     _u_d=$(dirname -- "$_u_d")
   done
   [ -n "$PL_LDIR" ]
+}
+
+# _pl_ldir_src <source-root> <dest-root>: the source directory PL_LDIR
+# mirrors (the root itself, when the link IS the root).
+_pl_ldir_src() {
+  if [ "$PL_LDIR" = "$2" ]; then printf '%s' "$1"
+  else printf '%s/%s' "$1" "${PL_LDIR#"$2"/}"
+  fi
 }
 
 # _pl_symlink <source-root>: the live path is a symlink. Into its OWN

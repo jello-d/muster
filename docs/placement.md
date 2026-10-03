@@ -327,7 +327,9 @@ The user: reporting drift "might be good enough".
 MUST BE TRUE: placing a destination that is currently a symlink into its
 own source replaces the link with a copy and records the baseline, losing
 nothing, because the live file and the source were one file. A symlink
-pointing anywhere else is a fault. A whole-directory link is replaced by
+pointing anywhere else is a fault. A whole-directory link (the
+destination ROOT itself included: T12, a root linked into its own source
+read every file in-sync, the same inode on both sides) is replaced by
 a real directory of placed files, and anything only visible through the
 old link (untracked files inside the linked source directory) is reported
 before it disappears from view. A whole-directory link that shows a

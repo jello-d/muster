@@ -404,6 +404,60 @@ expect_rc 0 "with no symlink inside, the migration goes ahead"
 assert "and the link is a real directory now" \
   test -d "$DST/lnkdir" -a ! -h "$DST/lnkdir"
 
+# === a DEST ROOT that is itself a link is migrated, never in-sync (T12) =====
+# The integrator's measurement: `place <src> <home>/bin` where <home>/bin
+# was a symlink to that very source read `converged`, then `in-sync`,
+# forever (the same inode on both sides), while the tree was never
+# placed. The root migrates like any directory link inside one.
+RS=$TK/rootsrc
+RD=$HOME/rootdst
+mkdir -p "$RS/sub"
+echo 'r' > "$RS/r.conf"
+printf '#!/bin/sh\n' > "$RS/sub/tool"
+chmod 755 "$RS/sub/tool"
+g "$TK" add -A; g "$TK" commit -m rootsrc
+ln -s "$RS" "$RD"
+RCFG=$_T/rcfg
+printf 'place %s %s user-editable\n' "$RS" "$RD" > "$RCFG"
+rpl() { OUT=$(MUSTER_CONFIG=$RCFG "$MUSTER" "$@" 2>"$_T/err" </dev/null)
+  RC=$?; ERR=$(cat "$_T/err"); }
+rpl placed --porcelain
+expv "$RD/r.conf" migrate-dir
+expv "$RD/sub/tool" migrate-dir
+rpl place
+expect_rc 0 "a linked dest root: place migrates it"
+assert "linked root: now a REAL directory" test -d "$RD" -a ! -h "$RD"
+assert "linked root: its files are copies" same "$RS/r.conf" "$RD/r.conf"
+assert "linked root: the exec bit survives" \
+  test "$(mode "$RD/sub/tool")" = 755
+assert "linked root: no temp beside it" \
+  test -z "$(find "$HOME" -maxdepth 1 -name '*muster-tmp*')"
+rpl placed --porcelain
+expv "$RD/r.conf" in-sync
+# A root linked ANYWHERE ELSE is someone else's tree: a fault, untouched.
+rm -f "$RD/r.conf" "$RD/sub/tool"
+rmdir "$RD/sub" "$RD"
+mkdir -p "$_T/rootother/sub"
+echo theirs > "$_T/rootother/r.conf"
+ln -s "$_T/rootother" "$RD"
+rpl placed --porcelain
+expv "$RD/r.conf" linked-dir
+rpl place
+assert "a root linked elsewhere is left alone" \
+  test "$(readlink "$RD")" = "$_T/rootother"
+OUT=$(MUSTER_CONFIG=$RCFG "$MUSTER" check 2>&1); RC=$?
+expect_rc 3 "check: a root linked elsewhere is a FAULT"
+# A linked root showing a symlink takes T11's refusal, root and all.
+rm -f "$RD"
+rm -f "$_T/state/root$RD/r.conf" "$_T/state/root$RD/sub/tool"
+ln -s "$_T/installed/tool" "$RS/sub/alias"
+g "$TK" add -A; g "$TK" commit -m rootalias
+ln -s "$RS" "$RD"
+rpl place
+expect_rc 2 "a linked root holding a symlink: refused"
+assert "and named" has "$OUT" "refused    $RD/sub/alias: not a regular file"
+assert "and the root link is left as it was" test "$(readlink "$RD")" = "$RS"
+
 # === increment 2: capture, for directories an APPLICATION writes into ======
 mkdir -p "$SRC/kprof"
 echo 'layout one' > "$SRC/kprof/one.conf"
