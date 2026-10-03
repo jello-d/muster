@@ -76,6 +76,13 @@ _sc_service() {
   _v_cfg=$(_sc_quote "MUSTER_CONFIG=$SV_CONFIG") || return 1
   printf '%s\n[Unit]\nDescription=muster run %s\n\n' "$SC_MARK" "$1"
   printf '[Service]\nType=oneshot\nExecStart=%s run %s\n' "$_v_bin" "$1"
+  # Exit 1 is "ran, and repos need attention": a REPORT, stored and sent
+  # to the notifier, not a failed run. Without this every firing while
+  # anything was owed showed as a failed unit (measured by the
+  # integrator: an afternoon of red), and a unit that is routinely red
+  # teaches people to ignore red. Exit 2 and up (could not run) still
+  # fails the unit. The CLI keeps its contract: `muster run` exits 1.
+  printf 'SuccessExitStatus=1\n'
   printf 'Environment=%s\n' "$_v_cfg"
   for _v_k in MUSTER_ROOT MUSTER_STATE_DIR MUSTER_NOTIFY MUSTER_KEEP; do
     if [ "$_v_k" = MUSTER_NOTIFY ]; then _v_v=$(run_notifier)

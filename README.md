@@ -363,9 +363,14 @@ source and no other machine will get it.
 user units (`~/.config/systemd/user/muster-<profile>.{service,timer}`),
 generated, never hand-edited:
 
-- The unit runs THE INSTALLED muster, the one on PATH (falling back to
-  the running copy only where none is installed), so an install or a
-  check from a dev checkout never repoints the live timers at that tree.
+- The unit runs THE INSTALLED muster, the one on PATH followed to the
+  real file (falling back to the running copy only where none is
+  installed), so an install or a check from a dev checkout never
+  repoints the live timers at that tree, and callers with and without
+  the bin link on PATH bake the same unit.
+- The service declares `SuccessExitStatus=1`: a run that found repos
+  needing attention has reported, not failed, so the unit stays green;
+  a run that could not run (exit 2) still fails it.
 - `install` writes each unit only if its content changed, bakes the
   config path (and `MUSTER_ROOT`, `MUSTER_STATE_DIR`, `MUSTER_NOTIFY`,
   `MUSTER_KEEP` when set) into the service, the notifier as an ABSOLUTE
