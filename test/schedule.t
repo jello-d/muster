@@ -81,15 +81,27 @@ assert "the unit's command runs the profile and stores it" \
 
 # With a muster INSTALLED (on PATH), the unit runs that one, whichever
 # copy ran install, and a check from this tree sees no drift: a dev
-# checkout must never repoint the live timers at itself.
-mkdir -p "$_T/installed"
-ln -s "$MUSTER" "$_T/installed/muster"
+# checkout must never repoint the live timers at itself. The fixture is
+# the real layout: a payload COPY, and a bin dir linking into it.
+mkdir -p "$_T/payload" "$_T/installed"
+cp -R "$HERE/../bin" "$HERE/../lib" "$_T/payload/"
+ln -s "$_T/payload/bin/muster" "$_T/installed/muster"
+_pay=$(cd "$_T/payload/bin" && pwd -P)/muster
 PATH="$_T/installed:$PATH" "$MUSTER" schedule install >/dev/null 2>&1
 assert "the unit runs the INSTALLED muster, not the copy that installed" \
   has "$(cat "$UNITS/muster-watch.service")" \
-  "ExecStart=\"$_T/installed/muster\" run watch"
+  "ExecStart=\"$_pay\" run watch"
 OUT=$(PATH="$_T/installed:$PATH" "$MUSTER" schedule check 2>&1); RC=$?
 expect_rc 0 "a check from this tree against the installed muster's units"
+# ONE program, one ExecStart, whoever asks: the installed muster run
+# with its link off PATH (a timer, a plain ssh) bakes what a login shell
+# with the link on PATH baked, so neither reads the other as drift.
+OUT=$("$_T/installed/muster" schedule check 2>&1); RC=$?
+expect_rc 0 "a check by the installed muster with its link off PATH"
+"$_T/installed/muster" schedule install >/dev/null 2>&1
+OUT=$(PATH="$_T/installed:$PATH" "$_T/installed/muster" schedule check \
+  2>&1); RC=$?
+expect_rc 0 "installed off PATH, checked with the link on PATH"
 "$MUSTER" schedule install >/dev/null 2>&1
 
 # Idempotent: nothing rewritten the second time.

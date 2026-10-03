@@ -44,10 +44,23 @@ _sc_quote() {
 # install" meant a check from a dev checkout called the live units drift,
 # with `schedule install` (repointing the timers at a dev tree) as its
 # remedy: found live, the only difference being ExecStart.
+#
+# BOTH BRANCHES BAKE THE REAL FILE, the PATH one following its links the
+# way bin/muster does. Resolving only the directory baked the bin LINK
+# when the caller had it on PATH and the payload file when it did not
+# (MUSTER_BIN is resolved), so one program read as two and the units
+# flapped `differs` between a login shell and a timer: found live.
 _sc_runner() {
   _r_bin=$(command -v muster 2>/dev/null) || _r_bin=
   case $_r_bin in
-    /*) _r_bin=$(_sv_resolve "$(dirname -- "$_r_bin")")/${_r_bin##*/} ;;
+    /*) while [ -h "$_r_bin" ]; do
+          _r_l=$(readlink -- "$_r_bin")
+          case $_r_l in
+            /*) _r_bin=$_r_l ;;
+            *) _r_bin=$(dirname -- "$_r_bin")/$_r_l ;;
+          esac
+        done
+        _r_bin=$(_sv_resolve "$(dirname -- "$_r_bin")")/${_r_bin##*/} ;;
     *) _r_bin=$MUSTER_BIN ;;
   esac
   printf '%s' "$_r_bin"
