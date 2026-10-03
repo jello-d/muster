@@ -131,29 +131,6 @@ _pu_act() {
   }
 }
 
-# _pu_locked <cmd...>: run it holding the box lock: push acts, so a timer
-# must not act on the same repos mid-way.
-_pu_locked() {
-  _l_box=$(_rn_state_dir)/.box-lock
-  case $_l_box in
-    *\'*) echo "muster: unusable state dir [$_l_box]" >&2; return 2 ;;
-  esac
-  mkdir -p "$(_rn_state_dir)" || return 2
-  if ! _rn_box_lock "$_l_box"; then
-    echo "muster: another muster run held this box for" \
-      "${MUSTER_RUN_WAIT:-600}s; push did not run" >&2
-    return 2
-  fi
-  # shellcheck disable=SC2064  # expanding now is the point
-  trap "rm -f '$_l_box/pid'; rmdir '$_l_box' 2>/dev/null" EXIT
-  _l_rc=0
-  "$@" || _l_rc=$?
-  rm -f "$_l_box/pid"
-  rmdir "$_l_box" 2>/dev/null || :
-  trap - EXIT
-  return "$_l_rc"
-}
-
 # _pu_run <act?> [name...]: judge (fetching), list or push, refuse aloud.
 _pu_run() {
   _u_act=$1; shift
@@ -202,7 +179,7 @@ push_main() {
     _pu_run '' "$@"; return
   fi
   _m_rc=0
-  _pu_locked _pu_run act "$@" || _m_rc=$?
+  run_box_locked push _pu_run act "$@" || _m_rc=$?
   if [ -n "$_m_refresh" ]; then _rs_refresh; fi
   return "$_m_rc"
 }

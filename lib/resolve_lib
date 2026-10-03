@@ -231,26 +231,11 @@ _rs_push() {
   [ "$_h_rc" -lt 2 ] || RS_BROKE=1
 }
 
-# _rs_act <dry> [name...]: steps 1 and 2, under the box lock.
+# _rs_act <dry> [name...]: steps 1 and 2; run under the box lock.
 _rs_act() {
-  _a_box=$(_rn_state_dir)/.box-lock
-  case $_a_box in
-    *\'*) echo "muster: unusable state dir [$_a_box]" >&2; return 2 ;;
-  esac
-  mkdir -p "$(_rn_state_dir)" || return 2
-  if ! _rn_box_lock "$_a_box"; then
-    echo "muster: another muster run held this box for" \
-      "${MUSTER_RUN_WAIT:-600}s; resolve did not run" >&2
-    return 2
-  fi
-  # shellcheck disable=SC2064  # expanding now is the point
-  trap "rm -f '$_a_box/pid'; rmdir '$_a_box' 2>/dev/null" EXIT
   _rs_repos "$@"
   _a_dry=$1; shift
   if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then _rs_config "$_a_dry"; fi
-  rm -f "$_a_box/pid"
-  rmdir "$_a_box" 2>/dev/null || :
-  trap - EXIT
 }
 
 resolve_main() {
@@ -268,7 +253,7 @@ resolve_main() {
   done
   survey_config || return 2
   RS_NEED='' RS_BROKE='' RS_UNFETCHED=''
-  _rs_act "$_m_dry" "$@" || return 2
+  run_box_locked resolve _rs_act "$_m_dry" "$@" || return 2
   [ -z "$_m_push" ] || _rs_push "$_m_dry" "$@"
   [ -n "$_m_dry" ] || _rs_refresh
   _rs_owed_needs "$_m_dry" "$@"

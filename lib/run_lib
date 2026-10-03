@@ -333,6 +333,35 @@ _rn_invoke() {
   "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
 }
 
+# run_box_locked <verb> <cmd...>: run <cmd> holding the box lock, for a
+# verb that ACTS outside `run` (resolve, push), so a timer cannot act on
+# the same repos mid-way. One copy of the lock's arming and release, the
+# literal baked into the trap when armed (the house rule on deferred
+# expansion in a destructive trap). `run` itself keeps its own, which
+# also stores a run that could not run. Exit: <cmd>'s, or 2 when the box
+# could not be had.
+run_box_locked() {
+  _bx_verb=$1; shift
+  _bx_box=$(_rn_state_dir)/.box-lock
+  case $_bx_box in
+    *\'*) echo "muster: unusable state dir [$_bx_box]" >&2; return 2 ;;
+  esac
+  mkdir -p "$(_rn_state_dir)" || return 2
+  if ! _rn_box_lock "$_bx_box"; then
+    echo "muster: another muster run held this box for" \
+      "${MUSTER_RUN_WAIT:-600}s; $_bx_verb did not run" >&2
+    return 2
+  fi
+  # shellcheck disable=SC2064  # expanding now is the point
+  trap "rm -f '$_bx_box/pid'; rmdir '$_bx_box' 2>/dev/null" EXIT
+  _bx_rc=0
+  "$@" || _bx_rc=$?
+  rm -f "$_bx_box/pid"
+  rmdir "$_bx_box" 2>/dev/null || :
+  trap - EXIT
+  return "$_bx_rc"
+}
+
 # _rn_run_locked <profile> <dir> <tmp>: the verb, under the box lock,
 # into <tmp>.records / .err; returns the verb's exit, or 2 when the box
 # lock could not be had (stored as a run that did not run).
