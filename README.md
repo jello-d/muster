@@ -344,9 +344,15 @@ it at once. `run` and `schedule install` refuse an overlap; observe-only
 profiles overlap freely. A profile whose selectors expand to nothing
 fails its run rather than falling back to the whole set.
 
-With no profile declared there is one default, observe-only: `owed`,
-hourly. Which verb runs unattended is the integrator's choice per
-profile; nothing writes to a working tree unless a profile says
+With no profile declared there is one, named `default`: verb `owed`
+(observe only), over every repo, on demand; declaring a `driver` gives
+it an hourly cadence. Run it with `muster run default`. Its name is
+deliberately NOT its verb, and yours should not be either: `muster owed`
+runs the verb ad hoc, while `muster run <profile>` also stores the run
+and notifies, so a profile named after its verb makes two different
+commands look like one (`profile fleet sync 15m`, not `profile sync
+sync 15m`). Which verb runs unattended is the integrator's choice per
+profile; nothing writes to a working tree unless a profile says sync or
 catch-up.
 
 `muster run <profile>` runs the verb and stores its records, stderr and

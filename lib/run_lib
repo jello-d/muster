@@ -90,8 +90,13 @@ run_profiles() {
     }')
   fi
   if [ -n "$_f_out" ]; then printf '%s\n' "$_f_out"
-  elif [ "$_f_glob" = manual ]; then printf 'owed owed - manual\n'
-  else printf 'owed owed 1h %s\n' "$_f_glob"
+  # The default is NAMED `default`, never after its verb: `profile owed
+  # owed` made `muster owed` (the verb, ad hoc) and `muster run owed`
+  # (the profile, which also stores and notifies) look like one command,
+  # and reaching for one gets the work done with no banner update (the
+  # integrator's finding, 2026-10-03, which renamed its own to `fleet`).
+  elif [ "$_f_glob" = manual ]; then printf 'default owed - manual\n'
+  else printf 'default owed 1h %s\n' "$_f_glob"
   fi
 }
 

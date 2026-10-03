@@ -36,93 +36,95 @@ mkrepo one
 # scheduled that was not declared, so not having run is not a finding.
 cli report --porcelain
 expect_rc 0 "report before any run, nothing declared"
-assert "default profile: owed" test "$(pfield owed verb)" = owed
+assert "the default profile: named default, verb owed" \
+  test "$(pfield default verb)" = owed
 assert "default profile: on demand, no interval" \
-  test "$(pfield owed every)" = -
+  test "$(pfield default every)" = -
 assert "default profile: driven by nothing" \
-  test "$(pfield owed driver)" = manual
+  test "$(pfield default driver)" = manual
 assert "no run yet, on demand: on-demand" \
-  test "$(pfield owed status)" = on-demand
+  test "$(pfield default status)" = on-demand
 # Declaring only a driver gives the default profile a cadence.
 printf 'driver systemd\n' > "$C/sys"
 MUSTER_CONFIG=$C/sys cli report --porcelain
 assert "driver systemd alone: the default runs hourly" \
-  test "$(pfield owed every)" = 1h
+  test "$(pfield default every)" = 1h
 assert "driver systemd alone: a fresh intent is pending, not never" \
-  test "$(pfield owed status)" = pending
+  test "$(pfield default status)" = pending
 
-cli run owed
+cli run default
 expect_rc 0 "run: the verb's exit passes through (clean set)"
-assert "run: records stored" test -s "$S/owed/latest.records"
-assert "run: stderr stored" test -f "$S/owed/latest.err"
-assert "run: meta has the verb" test "$(meta owed verb)" = owed
-assert "run: meta has the exit" test "$(meta owed exit)" = 0
+assert "run: records stored" test -s "$S/default/latest.records"
+assert "run: stderr stored" test -f "$S/default/latest.err"
+assert "run: meta has the verb" test "$(meta default verb)" = owed
+assert "run: meta has the exit" test "$(meta default exit)" = 0
 assert "run: meta has started and finished" \
-  test "$(meta owed finished)" -ge "$(meta owed started)"
-assert "run: one history entry" test "$(nhist owed)" = 1
+  test "$(meta default finished)" -ge "$(meta default started)"
+assert "run: one history entry" test "$(nhist default)" = 1
 assert "run: no temp files left" \
-  test -z "$(find "$S/owed" -name '.run.*')"
-assert "run: no lock left" test ! -e "$S/owed/lock"
+  test -z "$(find "$S/default" -name '.run.*')"
+assert "run: no lock left" test ! -e "$S/default/lock"
 cli report --porcelain
 expect_rc 0 "report after a clean run"
-assert "after a clean run: ok" test "$(pfield owed status)" = ok
+assert "after a clean run: ok" test "$(pfield default status)" = ok
 assert "after a clean run: nothing needs attention" \
-  test "$(pfield owed attention)" = 0
+  test "$(pfield default attention)" = 0
 
 # The store holds exactly what the verb prints: one computation.
-_stored=$(cat "$S/owed/latest.records")
+_stored=$(cat "$S/default/latest.records")
 _direct=$("$MUSTER" owed --porcelain --no-fetch 2>/dev/null)
 assert "stored records equal the verb's own output" \
   test "$_stored" = "$_direct"
 
 # === attention, and the report's own rows ===================================
 upstream_moves one
-cli run owed
+cli run default
 expect_rc 1 "run: attention passes through as 1"
 cli report --porcelain
-assert "report: attention" test "$(pfield owed status)" = attention
-assert "report: one row needs attention" test "$(pfield owed attention)" = 1
+assert "report: attention" test "$(pfield default status)" = attention
+assert "report: one row needs attention" test "$(pfield default attention)" = 1
 cli report
 assert "report table: the summary header" starts "$OUT" PROFILE
-assert "report table: the profile's section" has "$OUT" "== owed (owed)"
+assert "report table: the profile's section" has "$OUT" "== default (owed)"
 assert "report table: the row, by owed's own renderer" has "$OUT" "behind 1"
 g "$ROOT/one" pull --ff-only
 
 # === stale, failed, and a run older than it should be ======================
 # Staleness is a promise only a DRIVEN profile makes.
-MUSTER_CONFIG=$C/sys cli run owed
-sed -i.bak 's/^finished=.*/finished=1000/' "$S/owed/latest.meta"
-rm -f "$S/owed/latest.meta.bak"
+MUSTER_CONFIG=$C/sys cli run default
+sed -i.bak 's/^finished=.*/finished=1000/' "$S/default/latest.meta"
+rm -f "$S/default/latest.meta.bak"
 MUSTER_CONFIG=$C/sys cli report --porcelain
 assert "a run older than twice its interval: stale" \
-  test "$(pfield owed status)" = stale
+  test "$(pfield default status)" = stale
 expect_rc 1 "report with a stale profile"
 cli report --porcelain
 assert "the same old run, undriven: not stale" \
-  test "$(pfield owed status)" = ok
-MUSTER_ROOT=$_T/nowhere MUSTER_CONFIG=$C/sys "$MUSTER" run owed \
+  test "$(pfield default status)" = ok
+MUSTER_ROOT=$_T/nowhere MUSTER_CONFIG=$C/sys "$MUSTER" run default \
   >/dev/null 2>&1
 MUSTER_CONFIG=$C/sys cli report --porcelain
-assert "a run that could not run: failed" test "$(pfield owed status)" = failed
-assert "failed: exit 2 recorded" test "$(meta owed exit)" = 2
+assert "a run that could not run: failed" \
+  test "$(pfield default status)" = failed
+assert "failed: exit 2 recorded" test "$(meta default exit)" = 2
 
 # === declared profiles ======================================================
-printf 'profile watch owed 30m\nprofile sync catch-up 2h\n' > "$C/two"
+printf 'profile watch owed 30m\nprofile keep catch-up 2h\n' > "$C/two"
 printf 'profile look survey 1d\n' >> "$C/two"
 MUSTER_CONFIG=$C/two cli report --porcelain
 assert "declared: three profiles, and no default" \
   test "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 3
 assert "declared: watch every 30m" test "$(pfield watch every)" = 30m
-assert "declared: the default is gone" test -z "$(pfield owed verb)"
+assert "declared: the default is gone" test -z "$(pfield default verb)"
 # A config whose LAST line is not a profile: the AND-list trap that once
 # made every profile vanish under set -e.
 printf 'profile tail owed 1h\nroot %s\n' "$ROOT" > "$C/tail"
 MUSTER_CONFIG=$C/tail cli run tail
 assert "profiles are found when the last line is not one" \
   test -s "$S/tail/latest.records"
-MUSTER_CONFIG=$C/two cli run owed
+MUSTER_CONFIG=$C/two cli run default
 expect_rc 2 "running an undeclared profile"
-assert "an undeclared profile is named" has "$ERR" "no profile 'owed'"
+assert "an undeclared profile is named" has "$ERR" "no profile 'default'"
 
 for _bad in 'profile x frobnicate 1h' 'profile x owed 1w' 'profile x owed' \
     'profile x owed 1h bad/sel' 'profile a/b owed 1h' 'profile .x owed 1h' \
@@ -135,12 +137,12 @@ done
 # Per-profile choice of what runs unattended: a catch-up profile ACTS.
 mkrepo acted
 upstream_moves acted
-MUSTER_CONFIG=$C/two cli run sync
+MUSTER_CONFIG=$C/two cli run keep
 assert "a catch-up profile pulls" \
   test "$(git -C "$ROOT/acted" rev-parse HEAD)" \
   = "$(git --git-dir="$_T/origins/acted.git" rev-parse main)"
 assert "its stored records are catch-up's" \
-  has "$(cat "$S/sync/latest.records")" "action=pull result=ok"
+  has "$(cat "$S/keep/latest.records")" "action=pull result=ok"
 # ...and an owed profile does not.
 upstream_moves acted
 _before=$(git -C "$ROOT/acted" rev-parse HEAD)
