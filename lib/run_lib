@@ -333,6 +333,63 @@ _rn_invoke() {
   "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
 }
 
+# CONFIG FAULTS REACH THE BANNER (agreed with the user, 2026-10-03). A
+# pending merge-back, capture or displaced edit used to be seen only by
+# `muster check`, so it could sit for days. Every run now stores the
+# placement faults (placement_findings, the classification check uses,
+# so the two never disagree) and flags `muster.config` with the notifier,
+# a key no profile can take (profile names are [A-Za-z0-9_-]). report
+# reads the store, so it stays instant.
+#
+#   no store      no placement declared on this box
+#   empty store   checked, nothing needs a person
+#   lines         one fault each, as check words it
+
+_rn_config_store() { printf '%s/config.faults' "$(_rn_state_dir)"; }
+
+# _rn_config_scan: under the box lock, so never mid-place. When placement
+# cannot be read, the previous store is LEFT, never replaced by an empty
+# one: "no faults" from a read that failed would be a silent all-clear.
+_rn_config_scan() {
+  _cs_f=$(_rn_config_store)
+  if [ -z "$(_pl_roots)" ]; then rm -f "$_cs_f"; return 0; fi
+  _cs_all=$(placement_findings 2>/dev/null) || return 0
+  printf '%s\n' "$_cs_all" | sed -n 's/^fault //p' > "$_cs_f.$$" \
+    && mv -f "$_cs_f.$$" "$_cs_f"
+  rm -f "$_cs_f.$$"
+}
+
+# _rn_config_notify: the store's state, as a flag or a clear. A notifier
+# that is configured and absent was already reported by _rn_notify.
+_rn_config_notify() {
+  _cn_cmd=$(run_notifier)
+  [ -n "$_cn_cmd" ] && command -v "$_cn_cmd" >/dev/null 2>&1 || return 0
+  _cn_f=$(_rn_config_store)
+  if [ -s "$_cn_f" ]; then
+    _cn_v=flag
+    "$_cn_cmd" flag muster.config "muster: $(grep -c . "$_cn_f") config" \
+      "fault(s) need a person; muster resolve lists each with its command" \
+      >/dev/null 2>&1 </dev/null || _cn_v=failed
+  else
+    _cn_v=clear
+    "$_cn_cmd" clear muster.config >/dev/null 2>&1 </dev/null \
+      || _cn_v=failed
+  fi
+  [ "$_cn_v" != failed ] \
+    || echo "muster: notifier $_cn_cmd failed for muster.config" >&2
+}
+
+# _rn_report_config: report's config section, from the store.
+_rn_report_config() {
+  _rc_f=$(_rn_config_store)
+  [ -s "$_rc_f" ] || return 0
+  _rc_age=$(( $(date +%s) - $(_sv_mtime "$_rc_f" || date +%s) ))
+  printf '\n== config needs a person (as of the last run, %s ago)\n' \
+    "$(_rn_age "$_rc_age")"
+  cat "$_rc_f"
+  echo "each with its command: muster resolve"
+}
+
 # run_box_locked <verb> <cmd...>: run <cmd> holding the box lock, for a
 # verb that ACTS outside `run` (resolve, push), so a timer cannot act on
 # the same repos mid-way. One copy of the lock's arming and release, the
@@ -385,6 +442,7 @@ _rn_run_locked() {
   _rn_invoke "$1" >"$3.records" 2>"$3.err" </dev/null || _q_rc=$?
   # Still holding the box: the refs as this run LEFT them.
   _rn_heads "$3.records" >"$3.heads" 2>/dev/null || :
+  _rn_config_scan
   # Released: disarm the box paths FIRST, so an interruption from here on
   # cannot remove a lock another run has taken in the meantime.
   # shellcheck disable=SC2064  # expanding now is the point
@@ -436,6 +494,7 @@ run_main() {
     >>"$_m_tmp.meta"
   _rn_store "$_m_dir" "$_m_start-$$" "$_m_tmp"
   _rn_notify "$1" "$_m_dir" "$_m_rc"
+  _rn_config_notify
   _rn_unlock "$_m_dir"
   trap - EXIT
   return "$_m_rc"
@@ -596,11 +655,19 @@ report_main() {
   _r_out=$(run_profiles | while read -r _r_n _r_v _r_e _r_d _r_sel; do
     _rn_status "$_r_n" "$_r_v" "$_r_e" "$_r_d"
   done)
+  _r_cf=$(_rn_config_store)
+  _r_nf=0
+  [ ! -s "$_r_cf" ] || _r_nf=$(grep -c . "$_r_cf")
   if [ "$_r_mode" = porcelain ]; then
     printf '%s\n' "$_r_out"
+    # One more record, only where placement is declared: not a profile.
+    [ ! -e "$_r_cf" ] || printf 'config=placement faults=%s asof=%s\n' \
+      "$_r_nf" "$(_sv_mtime "$_r_cf" || echo -)"
   else
     _rn_report_table "$_r_out"
+    _rn_report_config
   fi
+  [ "$_r_nf" = 0 ] || return 1
   # Fine: ok, and the two that are not overdue (pending, on-demand).
   printf '%s\n' "$_r_out" | awk '$5 !~ /^status=(ok|pending|on-demand)$/ {
     bad = 1 } END { exit bad + 0 }'

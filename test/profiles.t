@@ -284,7 +284,10 @@ chmod +x "$_T/notifier"
 printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' > "$C/n"
 mkrepo nmoved
 nrun() { MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/notifier cli run n; }
-nlast() { tail -n 1 "$N_LOG" 2>/dev/null; }
+# nlast: the last PROFILE notification. Every run also flags or clears
+# muster.config after its own, which nlast skips; nconfig reads that.
+nlast() { grep -v ' muster\.config' "$N_LOG" 2>/dev/null | tail -n 1; }
+nconfig() { grep ' muster\.config' "$N_LOG" 2>/dev/null | tail -n 1; }
 nrun
 assert "a clean run CLEARS its flag" test "$(nlast)" = "clear muster-n"
 upstream_moves nmoved
@@ -374,6 +377,75 @@ assert "a run that did not run leaves no refs behind" \
   test ! -e "$S/mv/latest.heads"
 mvp report --porcelain
 assert "and reports nothing moved" test "$(pfield mv moved)" = -
+
+# === config faults reach report and the banner ==============================
+# A pending merge-back used to be seen only by `muster check`. Every run
+# now stores the placement faults and flags muster.config; report reads
+# the store. One real file, through its whole lifecycle.
+CTK=$_T/ctk
+mkdir -p "$CTK/conf" "$HOME/cdst"
+echo 'one' > "$CTK/conf/a.conf"
+git init -q "$CTK"
+g "$CTK" add -A
+g "$CTK" commit -m seed
+printf 'profile c owed 1h\nrepo one\nplace %s %s user-editable\n' \
+  "$CTK/conf" "$HOME/cdst" > "$C/c"
+crun() { MUSTER_CONFIG=$C/c MUSTER_NOTIFY=$_T/notifier cli run c; }
+crep() { MUSTER_CONFIG=$C/c cli report "$@"; }
+MUSTER_CONFIG=$C/c "$MUSTER" place >/dev/null 2>&1
+crun
+assert "config clean: the store exists, empty" \
+  test -e "$S/config.faults" -a ! -s "$S/config.faults"
+assert "config clean: the banner is cleared" \
+  test "$(nconfig)" = "clear muster.config"
+crep
+assert "config clean: no config section" lacks "$OUT" "config needs"
+crep --porcelain
+assert "porcelain: a config record, zero faults" \
+  has "$OUT" "config=placement faults=0 asof="
+echo 'my live edit' > "$HOME/cdst/a.conf"
+crep
+assert "before a run, report shows the STORED state" \
+  lacks "$OUT" "config needs"
+crun
+assert "after a run: the fault is stored" \
+  has "$(cat "$S/config.faults")" "merge-back $HOME/cdst/a.conf"
+assert "after a run: the banner is flagged, with the count" \
+  starts "$(nconfig)" "flag muster.config muster: 1 config fault(s)"
+assert "the profile's own flag is separate" \
+  test "$(nlast)" = "clear muster-c"
+crep
+expect_rc 1 "report with a config fault: 1"
+assert "report: a config section, with its age" \
+  has "$OUT" "== config needs a person (as of the last run,"
+assert "report: names the file" has "$OUT" "merge-back $HOME/cdst/a.conf"
+assert "report: and the command" has "$OUT" "muster resolve"
+crep --porcelain
+assert "porcelain: one fault" has "$OUT" "config=placement faults=1 "
+OUT=$(MUSTER_CONFIG=$C/c "$MUSTER" check 2>&1)
+assert "check words it the same: one classification" \
+  has "$OUT" "$(cat "$S/config.faults")"
+MUSTER_CONFIG=$C/c "$MUSTER" merge-back >/dev/null 2>&1
+crun
+assert "merged back: the store is empty again" test ! -s "$S/config.faults"
+assert "merged back: the banner is cleared" \
+  test "$(nconfig)" = "clear muster.config"
+crep
+assert "merged back: no config section" lacks "$OUT" "config needs"
+# DRIFT IS NOT A FAULT: what an apply's `muster place` fixes on its own
+# must never reach the banner. A new source file, not yet placed.
+echo 'two' > "$CTK/conf/b.conf"
+g "$CTK" add -A
+g "$CTK" commit -m "a new file, not yet placed"
+crun
+assert "drift only: the store stays empty" test ! -s "$S/config.faults"
+assert "drift only: the banner stays clear" \
+  test "$(nconfig)" = "clear muster.config"
+printf 'profile c owed 1h\nrepo one\n' > "$C/cn"
+MUSTER_CONFIG=$C/cn MUSTER_NOTIFY=$_T/notifier cli run c
+assert "no placement declared: no store at all" test ! -e "$S/config.faults"
+MUSTER_CONFIG=$C/cn cli report --porcelain
+assert "no placement declared: no config record" lacks "$OUT" "config="
 
 # === unreachable is not attention, for a while ==============================
 # A fetch that fails (the locked keyring at the greeter, measured by the

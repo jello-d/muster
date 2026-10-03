@@ -226,7 +226,9 @@ cannot; `muster resolve` does it. A fix made by hand shows in `report`
 after the next run, and until then report names the repos that moved
 and the command to refresh: `muster run <profile>`, or `resolve`.
 `muster check` is the deeper question, whether muster itself is healthy
-here, and is where config faults show without a run.
+here. Config faults (a pending merge-back, capture or displaced edit)
+reach the banner on every run and show in `report`; `check` computes
+them fresh.
 
 ### push: a batch push that shows what it publishes
 
@@ -317,6 +319,15 @@ or `muster resolve` for all of them. Uncommitted edits do not count, or
 every repo someone is working in would read changed all day. A hint,
 never a failure: the exit is unchanged. Porcelain carries it as
 `moved=<repo,...>` or `moved=-`.
+
+CONFIG FAULTS reach `report` and the banner too. Every run stores the
+placement faults (the same classification `check` uses, so the two
+never disagree) and flags `muster.config` with the notifier, a key no
+profile name can take; a run with none clears it. `report` lists them
+as the last run stored them, with the age, and then exits 1. Drift (what
+`muster place` repairs on its own) never reaches the banner. Porcelain
+adds one record where placement is declared:
+`config=placement faults=<n> asof=<epoch>`.
 
 The notifier (`notify </absolute/path>` in the config, or
 `$MUSTER_NOTIFY`, which overrides it) gets each run's STATE in the fleet's
