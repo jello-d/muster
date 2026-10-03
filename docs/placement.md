@@ -332,6 +332,15 @@ before it disappears from view.
 WHY: the integrator has on the order of a hundred such links plus a few
 whole-directory ones, and the migration is the risky moment.
 
+WHEN A SOURCE MOVES, SWEEP THE OLD LINKS FIRST. "Its own source" is read
+from where a link RESOLVES, so a link left pointing at the source's OLD
+path is `foreign`, reported every run and never touched, and it dangles
+until the integrator removes it. Measured live (2026-10-02): a runtime
+contract went unreadable through exactly such a link. Correct by the
+rule above, since muster cannot know a vacated path was ever a source;
+so moving a place source is a two-step job for the integrator: remove
+the old publishes, then `place`.
+
 ### P13. One infrastructure: muster's, and charon's approach
 
 MUST BE TRUE: placement uses the machinery muster already has (profiles
