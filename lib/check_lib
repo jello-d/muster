@@ -132,16 +132,21 @@ OVERLAPS
   return 0
 }
 
-# _ck_placement: config placed as copies (place_lib). What `muster place`
-# repairs is drift (an integrator's apply runs place). What needs a person
-# is a fault: every kept (displaced) edit until it is cleared, AND every
-# pending merge-back. Merge-back is an EXPLICIT verb, never part of an
-# apply (decided with the integrator, 2026-10-01: an apply that folded
-# live edits into a shared working tree is the anti-pattern placement
-# retires), so calling it drift would schedule an apply that can never
-# clear it. Until it is merged back the edit is not in the source, and
-# the other box will not get it: a person should know.
-_ck_placement() {
+# placement_findings: config placed as copies (place_lib), as findings,
+# one "<fault|drift> <text>" a line. THE ONE CLASSIFICATION: check reads
+# it, and so does every `run`, which stores the faults and puts them on
+# the banner (muster.config), so the two can never disagree.
+#
+# What `muster place` repairs is drift (an integrator's apply runs
+# place). What needs a person is a fault: every kept (displaced) edit
+# until it is cleared, AND every pending merge-back. Merge-back is an
+# EXPLICIT verb, never part of an apply (decided with the integrator,
+# 2026-10-01: an apply that folded live edits into a shared working tree
+# is the anti-pattern placement retires), so calling it drift would
+# schedule an apply that can never clear it. Until it is merged back the
+# edit is not in the source, and the other box will not get it: a person
+# should know.
+placement_findings() {
   _g_recs=$(placement_records)
   while IFS= read -r _g_r; do
     [ -n "$_g_r" ] || continue
@@ -150,29 +155,37 @@ _ck_placement() {
     case $_g_v in
       in-sync|app-held|unmanaged) ;;
       new|missing|place|converged|migrate|migrate-dir|displace|orphan)
-        _ck_add drift "place      $_g_v $_g_p" ;;
-      capture) _ck_add fault "capture    $_g_p: an application's work not" \
+        echo "drift place      $_g_v $_g_p" ;;
+      capture) echo "fault capture    $_g_p: an application's work not" \
         "yet in the source; review it, then muster capture" ;;
-      shadowed) _ck_add fault "place      shadowed $_g_p: a more specific" \
+      shadowed) echo "fault place      shadowed $_g_p: a more specific" \
         "root owns this path; remove it from one of the two sources" ;;
-      source-link) _ck_add fault "place      source-link $_g_p: its source" \
+      source-link) echo "fault place      source-link $_g_p: its source" \
         "is a symlink, which is never placed; make it a file or move it" \
         "out of the root" ;;
-      merge-back) _ck_add fault "merge-back $_g_p: a live edit not yet" \
+      merge-back) echo "fault merge-back $_g_p: a live edit not yet" \
         "in the source; review it, then muster merge-back" ;;
-      *) _ck_add fault "place      $_g_v $_g_p" ;;
+      *) echo "fault place      $_g_v $_g_p" ;;
     esac
   done <<RECORDS
 $_g_recs
 RECORDS
-  _g_disp=$(placement_displaced)
-  while read -r _g_run _g_path; do
+  placement_displaced | while read -r _g_run _g_path; do
     [ -n "$_g_path" ] || continue
-    _ck_add fault "displaced  $_g_path (run $_g_run): a repo-owned live" \
+    echo "fault displaced  $_g_path (run $_g_run): a repo-owned live" \
       "edit kept aside; review it, then muster displaced clear"
-  done <<DISPLACED
-$_g_disp
-DISPLACED
+  done
+}
+
+# _ck_placement: the findings above, into check's lists.
+_ck_placement() {
+  _g_all=$(placement_findings)
+  while read -r _g_k _g_t; do
+    [ -n "$_g_k" ] || continue
+    _ck_add "$_g_k" "$_g_t"
+  done <<FINDINGS
+$_g_all
+FINDINGS
 }
 
 # _ck_schedule: the units against the intent. Every line is drift, except
