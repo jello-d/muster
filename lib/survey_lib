@@ -56,10 +56,16 @@ _sv_mtime() {   # <file> -> epoch seconds, GNU or BSD stat; fails if absent
   stat -c %Y -- "$1" 2>/dev/null || stat -f %m -- "$1" 2>/dev/null
 }
 
+# NEVER WRITES, either: GIT_OPTIONAL_LOCKS=0 stops `status` refreshing the
+# index, and does NOT stop porcelain `diff` doing it (diff.autoRefreshIndex,
+# default true, measured on git 2.53), so that is turned off here too, in
+# the one place every read goes through. Found by stamp.t: a stamp, which
+# promises to be read-only, rewrote .git/index whenever a file's mtime
+# had moved without its content.
 _sv_git() {   # <repo> <git args...>: never walks above <repo>, never locks
   _g_repo=$1; shift
   GIT_CEILING_DIRECTORIES=$(dirname -- "$_g_repo") GIT_OPTIONAL_LOCKS=0 \
-    git -C "$_g_repo" "$@"
+    git -c diff.autoRefreshIndex=false -C "$_g_repo" "$@"
 }
 
 _sv_flag() { SV_FLAGS="${SV_FLAGS:+$SV_FLAGS,}$1"; }

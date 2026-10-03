@@ -147,6 +147,27 @@ cp "$SRC/app/b.conf" "$DST/app/b.conf"
 chmod "$(mode "$SRC/app/b.conf")" "$DST/app/b.conf"
 act place
 
+# === the merge-back guard reads git without writing its index ===========
+# A plain `git status` in the source tree rewrites its index when a
+# file's mtime moved without its content, taking .git/index.lock under
+# whatever session is working there.
+# Its own file, with a merge-back really pending, or the guard never
+# runs and the test proves nothing (it did, first time round).
+mkdir -p "$SRC/guard"
+echo 'source' > "$SRC/guard/g.conf"
+g "$TK" add -A; g "$TK" commit -m guard
+act place
+echo 'live edit' > "$DST/guard/g.conf"
+touch -t 202001010000 "$SRC/guard/g.conf"
+_ix=$(stat -c %.9Y "$TK/.git/index")
+act merge-back --dry-run
+assert "the guard was reached (a merge-back is pending)" \
+  has "$OUT" "would merge-back $DST/guard/g.conf"
+assert "merge-back's guard wrote no index in the source tree" \
+  test "$(stat -c %.9Y "$TK/.git/index")" = "$_ix"
+echo 'source' > "$DST/guard/g.conf"
+act place
+
 # === both changed: conflict, converged =======================================
 echo 'live x' > "$DST/app/a.conf"
 echo 'source y' > "$SRC/app/a.conf"

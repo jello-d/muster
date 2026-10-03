@@ -556,12 +556,21 @@ _pl_place_cb() {
   fi
 }
 
+# _pl_git_status <source file>: git's view of one source file, WITHOUT
+# writing the index: a plain `git status` refreshes it, taking
+# .git/index.lock in the integrator's working tree, where a guest
+# session's own git command then fails on the lock. Not _sv_git: that
+# fences git at the directory it is given, and this is a subdirectory.
+_pl_git_status() {
+  GIT_OPTIONAL_LOCKS=0 git -c diff.autoRefreshIndex=false \
+    -C "$(dirname -- "$1")" status --porcelain -- "$1" 2>/dev/null
+}
+
 # _pl_merge_cb: P5. Into the source WORKING TREE only, never committing,
 # and never into a source file git reports as modified (someone mid-edit).
 _pl_merge_cb() {
   [ "$PL_V" = merge-back ] || return 0
-  if [ -n "$(git -C "$(dirname -- "$PL_S")" status --porcelain \
-      -- "$PL_S" 2>/dev/null)" ]; then
+  if [ -n "$(_pl_git_status "$PL_S")" ]; then
     printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
       "$PL_D" "$PL_S"; return 0
   fi
@@ -663,8 +672,7 @@ _pl_is_source() {
 # committing, never over a source file git reports modified.
 _pl_capture_cb() {
   [ "$PL_V" = capture ] || return 0
-  if [ -e "$PL_S" ] && [ -n "$(git -C "$(dirname -- "$PL_S")" status \
-      --porcelain -- "$PL_S" 2>/dev/null)" ]; then
+  if [ -e "$PL_S" ] && [ -n "$(_pl_git_status "$PL_S")" ]; then
     printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
       "$PL_D" "$PL_S"; return 0
   fi

@@ -49,6 +49,14 @@ assert "listing: refuses the diverged repo, and says why" \
 assert "listing: a clean repo is not mentioned" lacks "$OUT" "clean"
 assert "listing PUSHED NOTHING" \
   test "$(origin_head ahead1)" = "$_o1" -a "$(origin_head ahead2)" = "$_o2"
+# Listing is a READ: it must not rewrite a repo's index (a plain `git
+# status` refreshes it whenever a file's mtime moved without its
+# content, taking .git/index.lock under a session working there).
+touch -t 202001010000 "$ROOT/ahead2/f"
+_ix=$(stat -c %.9Y "$ROOT/ahead2/.git/index")
+pu
+assert "listing wrote no repo's index" \
+  test "$(stat -c %.9Y "$ROOT/ahead2/.git/index")" = "$_ix"
 pu --dry-run --all
 assert "--dry-run --all: still only lists" \
   test "$(origin_head ahead1)" = "$_o1"

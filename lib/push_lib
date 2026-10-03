@@ -72,7 +72,8 @@ _pu_show() {
   _s_n=$(git -C "$2" rev-list --count "@{upstream}..$_s_r" 2>/dev/null) \
     || _s_n='?'
   printf '%-10s %s: %s commit(s)' push "$1" "$_s_n"
-  if [ -n "$(git -C "$2" status --porcelain --untracked-files=normal \
+  # Through _sv_git: listing is a read, and must not write the index.
+  if [ -n "$(_sv_git "$2" status --porcelain --untracked-files=normal \
       2>/dev/null)" ]; then
     printf ', and uncommitted work here (maybe a session in progress)'
   fi

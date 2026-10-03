@@ -208,14 +208,21 @@ expect_rc 1 "a stamp read from stdin (s1, since voided)"
 
 # === read-only, deterministic, and one computation ==========================
 mkrepo ro
-touch "$ROOT/ro/f"
+# A file whose mtime differs from the one the index cached, content
+# unchanged: the state in which porcelain `git diff` REWRITES .git/index
+# (diff.autoRefreshIndex, default true, and GIT_OPTIONAL_LOCKS=0 does not
+# stop it). This failed ~1 run in 19 for two days, whenever the fixture's
+# touch landed in the index's own second (racy git); the paths named in
+# the message (.git, .git/index) were the clue, 2026-10-03. A PAST mtime
+# makes it happen every run, and keeps the file itself older than the
+# marker.
+touch -t 202001010000 "$ROOT/ro/f"
 sleep 1
 touch "$_T/marker"
 take s10 ro
 chk s10
-# The changed paths go INTO the failure message: this failed once in ~19
-# full-suite runs (2026-10-01) and could not be reproduced, so the next
-# occurrence must say what was written rather than only that something was.
+# The changed paths go INTO the failure message, which is how this one
+# was found: say what was written, not only that something was.
 _ro_new=$(find "$ROOT/ro" -newer "$_T/marker" | sed "s|$ROOT/ro/||" \
   | tr '\n' ' ')
 assert "stamp and check write nothing to the repo (wrote: $_ro_new)" \
