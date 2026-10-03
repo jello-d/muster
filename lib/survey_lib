@@ -140,6 +140,12 @@ _sv_counts() {
 # remote. The newest of FETCH_HEAD, the upstream ref's reflog, and the
 # remote's HEAD reflog, because a fresh clone writes ONLY the last one.
 # None of them means never, which is reported, not guessed around.
+#
+# AN EMPTY FETCH_HEAD IS NOT A FETCH. git truncates it at the START of
+# every fetch, so a fetch that then FAILS leaves it empty and freshly
+# stamped: read by mtime, the age of a stale ref said "just now" beside
+# its own fetch-failed flag. A fetch that succeeds writes at least one
+# line, so only a non-empty FETCH_HEAD counts.
 _sv_fetched() {
   [ "$SV_UP" != - ] || return 0
   # The remote by NAME from config, not by splitting SV_UP: a remote's name
@@ -151,6 +157,7 @@ _sv_fetched() {
       "logs/refs/remotes/$_f_remote/HEAD"; do
     _f_path=$(_sv_git "$1" rev-parse --git-path "$_f_rel") || continue
     case $_f_path in /*) ;; *) _f_path=$1/$_f_path ;; esac
+    [ "$_f_rel" != FETCH_HEAD ] || [ -s "$_f_path" ] || continue
     _f_t=$(_sv_mtime "$_f_path") || continue
     if [ "$SV_FETCHED" = never ] || [ "$_f_t" -gt "$SV_FETCHED" ]; then
       SV_FETCHED=$_f_t

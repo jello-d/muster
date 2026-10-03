@@ -177,6 +177,20 @@ g "$ROOT/unreachable" remote set-url origin "$_T/origins/nowhere.git"
 survey --fetch unreachable
 expect unreachable state fetch-failed
 expect_rc 1 "a failed fetch"
+# ...and a failed fetch does not make the ref look FRESH: git empties
+# FETCH_HEAD at the start of every fetch, so by mtime a failure read as
+# "fetched just now". The age must stay that of the last GOOD fetch.
+for _u_f in FETCH_HEAD logs/refs/remotes/origin/main \
+    logs/refs/remotes/origin/HEAD; do
+  [ ! -e "$ROOT/unreachable/.git/$_u_f" ] \
+    || touch -t 202001010000 "$ROOT/unreachable/.git/$_u_f"
+done
+survey --fetch unreachable
+assert "a failed fetch leaves FETCH_HEAD empty (the trap is real)" \
+  test -f "$ROOT/unreachable/.git/FETCH_HEAD" \
+  -a ! -s "$ROOT/unreachable/.git/FETCH_HEAD"
+assert "a failed fetch keeps the last good fetch's age" \
+  test "$(field unreachable fetched)" -lt 1600000000
 
 # THE 2026-09-30 SHAPE: one run, upstream moved for both repos, one fetch
 # fails. The failed repo must contribute NO number (its ref is stale and
