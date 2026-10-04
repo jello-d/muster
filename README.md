@@ -433,7 +433,9 @@ by the remedy it wants:
             (`merge-back`, `capture`, `conflict`, a displaced edit, a
             `source-link`, a link it will not touch)
     note    shown, never counted: a pattern matching nothing here, an
-            undeclared driver
+            undeclared driver, a `hold` that matches nothing, a run
+            store left by a profile no longer declared (deleting that
+            history is a person's call)
 
 Exit: **0** all well, **1** drift only, **3** any fault (it outranks
 drift), **2** an invalid config. An integrator maps 1 to its apply and 3

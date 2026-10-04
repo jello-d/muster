@@ -227,6 +227,26 @@ cli() {
   OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
   RC=$?
 }
+# === stores of profiles no longer declared: a note, never deleted ========
+_cs=$_T/state
+mkdir -p "$_cs/oldname/history" "$_cs/kept" "$_cs/root/home"
+echo exit=0 > "$_cs/oldname/latest.meta"
+echo exit=0 > "$_cs/kept/latest.meta"
+echo placed > "$_cs/root/home/a.conf"
+ck 'driver manual' 'profile kept owed - alpha'
+expect_rc 0 "an orphan store is a note: the exit is unchanged"
+assert "the orphan store is named, with its size" \
+  has "$OUT" "note   store      oldname: the runs of a profile no longer"
+assert "a declared profile's store is not named" lacks "$OUT" "store      kept"
+assert "the placement mirror is not a profile store" \
+  lacks "$OUT" "store      root"
+assert "and the orphan is left exactly where it was" \
+  test -f "$_cs/oldname/latest.meta"
+rm -f "$_cs/oldname/latest.meta" "$_cs/kept/latest.meta" \
+  "$_cs/root/home/a.conf"
+rmdir "$_cs/oldname/history" "$_cs/oldname" "$_cs/kept" "$_cs/root/home" \
+  "$_cs/root"
+
 cli check extra
 expect_rc 2 "check takes no arguments"
 

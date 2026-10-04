@@ -90,6 +90,25 @@ _ck_holds() {
   done
 }
 
+# _ck_stores: "<name> <KB>" for each profile store in the state dir whose
+# profile is no longer declared (a rename leaves one behind). A NOTE:
+# that history may be wanted, so deleting it is a person's call, never
+# an apply's. A store is a directory holding latest.meta, which is what
+# keeps the placement mirror, displaced edits and the lock out of it.
+_ck_stores() {
+  _o_dir=$(_rn_state_dir)
+  [ -d "$_o_dir" ] || return 0
+  _o_have=$(run_profiles | awk '{ print $1 }')
+  for _o_s in "$_o_dir"/*/latest.meta; do
+    [ -f "$_o_s" ] || continue
+    _o_s=${_o_s%/latest.meta}; _o_n=${_o_s##*/}
+    printf '%s\n' "$_o_have" | grep -qxF -- "$_o_n" && continue
+    # ./ for a relative state dir, so no path can be read as an option.
+    case $_o_s in /*) ;; *) _o_s=./$_o_s ;; esac
+    printf '%s %s\n' "$_o_n" "$(du -sk "$_o_s" | awk '{ print $1 }')"
+  done
+}
+
 # _ck_runs <status-line>: a driven profile whose runs are not happening,
 # or whose last run could not run, is a fault no install repairs.
 _ck_runs() {
@@ -128,6 +147,14 @@ PROFILES
   done <<HOLDS
 $_c_nh
 HOLDS
+  _c_os=$(_ck_stores)
+  while read -r _c_s _c_kb; do
+    [ -z "$_c_s" ] || _ck_add note "store      $_c_s: the runs of a" \
+      "profile no longer declared (${_c_kb} KB); delete it by hand if" \
+      "not wanted"
+  done <<STORES
+$_c_os
+STORES
   _c_ov=$(_rn_overlaps)
   while read -r _c_a _c_b _c_r; do
     [ -z "$_c_r" ] \
