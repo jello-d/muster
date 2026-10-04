@@ -406,7 +406,7 @@ _sv_cfg_check() {   # validate the whole file before anything is read from it
 # _sv_cfg_lines: every line's grammar; the first one that does not parse
 # is named, with its line number.
 _sv_cfg_lines() {
-  _k_n=0 _k_drv=0 _k_ntf=0
+  _k_n=0 _k_drv=0 _k_ntf=0 _k_kp=0
   while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
     _k_n=$((_k_n + 1))
     case $_k_kw in
@@ -437,6 +437,10 @@ _sv_cfg_lines() {
       expect)
         case $_k_b in unreadable|absent) continue ;; esac ;;
       hold) _sv_cfg_selector "$_k_a" && [ -z "$_k_b" ] && continue ;;
+      keep)
+        _k_kp=$((${_k_kp:-0} + 1))
+        [ -n "$(_rn_seconds "$_k_a")" ] && [ -z "$_k_b" ] \
+          && [ "$_k_kp" = 1 ] && continue ;;
     esac
     echo "muster: $SV_CONFIG:$_k_n: cannot parse '$_k_kw $_k_a $_k_b'" >&2
     return 1

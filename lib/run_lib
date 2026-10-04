@@ -27,8 +27,9 @@
 #   <profile>/latest.err       its stderr (fetch failures and the like)
 #   <profile>/latest.meta      key=value: profile verb interval started
 #                              finished exit host
-#   <profile>/history/<started>-<pid>.{records,err,meta}, the newest
-#                              $MUSTER_KEEP (default 48)
+#   <profile>/history/<started>-<pid>.{records,err,meta}, kept for
+#                              the config's `keep` (default 7d);
+#                              $MUSTER_KEEP, a count, overrides
 #
 # A RUN THAT CANNOT BE TRUSTED TO HAVE HAPPENED IS REPORTED AS SUCH: a
 # profile with no latest run is `never`, and one older than twice its
@@ -217,6 +218,17 @@ _rn_flagged() {
   }' | sort
 }
 
+# _rn_keep: how long a run's full records are kept, in seconds: the
+# config's `keep <age>`, else 7 days.
+_rn_keep() {
+  _k_a=$(_sv_cfg_all keep | head -n 1)
+  if [ -n "$_k_a" ] && _k_s=$(_rn_seconds "$_k_a"); then
+    printf '%s' "$_k_s"
+  else
+    printf '%s' 604800
+  fi
+}
+
 # _rn_store <dir> <started> <tmp-prefix>: move a finished run into place.
 # history first, then latest by rename, so a reader of latest.* sees the
 # old run or the new one, never half of each.
@@ -232,13 +244,20 @@ _rn_store() {
   if [ -f "$3.heads" ]; then mv -f "$3.heads" "$1/latest.heads"
   else rm -f "$1/latest.heads"
   fi
-  # Prune to the newest $MUSTER_KEEP runs. Names lead with epoch seconds,
-  # so a numeric sort is chronological.
-  _s_keep=${MUSTER_KEEP:-48}
+  # Prune. BY AGE, `keep <age>` in the config, 7 days by default: a
+  # count meant different spans at different cadences (48 runs was two
+  # days hourly and 12 hours at 15m, too short to see a week of a sync
+  # profile, measured 2026-10-04). $MUSTER_KEEP, a COUNT, still
+  # overrides, so whatever already set it keeps its meaning. Names lead
+  # with the run's start in epoch seconds, so they sort by time.
   # shellcheck disable=SC2012  # names are digits and a fixed suffix
   ls "$1/history" | sed -n 's/\.meta$//p' | sort -n \
-    | awk -v k="$_s_keep" '{ a[NR] = $0 } END {
-        for (i = 1; i <= NR - k; i++) print a[i] }' \
+    | awk -v k="${MUSTER_KEEP:-}" -v cut="$(( $(date +%s) - $(_rn_keep) ))" \
+      '{ a[NR] = $0 } END {
+        for (i = 1; i <= NR; i++) {
+          t = a[i]; sub(/-.*/, "", t)
+          if (k != "" ? i <= NR - k : t + 0 < cut + 0) print a[i]
+        } }' \
     | while read -r _s_old; do
         rm -f "$1/history/$_s_old.records" "$1/history/$_s_old.err" \
           "$1/history/$_s_old.meta"

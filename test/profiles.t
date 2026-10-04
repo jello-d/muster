@@ -214,6 +214,33 @@ assert "pruned to MUSTER_KEEP" test "$(nhist p)" = 2
 _newest=$(find "$S/p/history" -name '*.meta' | sort -n | tail -n 1)
 assert "the newest run is kept, and is the latest" \
   cmp -s "$_newest" "$S/p/latest.meta"
+# By AGE when no count is forced: 7 days unless the config says `keep`.
+_hp=$S/p/history
+_plant() {   # <epoch>: a stored run that started then
+  for _x in records err meta; do : > "$_hp/$1-1.$_x"; done
+}
+_hour=$(( $(date +%s) - 3600 ))
+_plant 1000
+_plant "$_hour"
+MUSTER_CONFIG=$C/p cli run p
+assert "by age: a run from 1970 is pruned" test ! -e "$_hp/1000-1.meta"
+assert "by age: one an hour old is kept (default 7 days)" \
+  test -e "$_hp/$_hour-1.meta"
+assert "by age: all three files of a pruned run go" \
+  test ! -e "$_hp/1000-1.records" -a ! -e "$_hp/1000-1.err"
+printf 'profile p owed 1h\nkeep 30m\n' > "$C/pk"
+MUSTER_CONFIG=$C/pk cli run p
+assert "keep 30m: the hour-old run is pruned too" \
+  test ! -e "$_hp/$_hour-1.meta"
+assert "keep 30m: this run is kept" test "$(nhist p)" -ge 1
+for _bad in 'keep 1w' 'keep' 'keep 7d 8d'; do
+  printf 'profile p owed 1h\n%s\n' "$_bad" > "$C/pb"
+  MUSTER_CONFIG=$C/pb cli report
+  expect_rc 2 "a bad keep line: $_bad"
+done
+printf 'keep 7d\nkeep 8d\n' > "$C/pb"
+MUSTER_CONFIG=$C/pb cli report
+expect_rc 2 "two keep lines"
 
 # === the lock ===============================================================
 # Held by a live process (this shell): refuse, change nothing.

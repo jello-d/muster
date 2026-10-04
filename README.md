@@ -358,8 +358,9 @@ catch-up.
 `muster run <profile>` runs the verb and stores its records, stderr and
 a meta file (`profile verb interval started finished exit host`) under
 `$MUSTER_STATE_DIR` (default `~/.local/state/muster/<profile>/`): a
-`latest.*` set swapped in whole, and a history pruned to `$MUSTER_KEEP`
-(default 48). ONE RUN AT A TIME ON A BOX: `run` waits for a box-wide
+`latest.*` set swapped in whole, and a history of every run's full
+records kept for the config's `keep` (default 7 days; `$MUSTER_KEEP`, a
+count, overrides). ONE RUN AT A TIME ON A BOX: `run` waits for a box-wide
 lock (up to `$MUSTER_RUN_WAIT` seconds, default 600), because profiles
 installed together fire together, and a catch-up pulling a repo while
 another profile is reading it yields a report about two different
@@ -606,6 +607,9 @@ muster surveys every git repo one level under `~/src`.
                              the relpaths, AND one of the `requires`
                              paths when given (a repo with a hook of its
                              own has not adopted the vendored hook)
+    keep <age>               how long each run's full records are kept
+                             (30m, 36h, 14d; default 7d). By age, so it
+                             means the same span at any cadence
     hold <name | /regex/>    the repo is OBSERVED by every verb and MOVED
                              by none: behind, it is owed `held` rather
                              than pull, rebase, skip or escalate, which
