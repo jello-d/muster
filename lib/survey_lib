@@ -251,6 +251,14 @@ _sv_short() {   # <sha or word> -> 12-char sha, or the word unchanged
 # `command -v x >/dev/null`), leaves the CALLER'S stdout on /dev/null when
 # it all runs inside $(...), and the records vanished (found 2026-10-03 by
 # the whole suite run under ksh: owed and catch-up saw no repos at all).
+#
+# A WORKAROUND FOR A SHELL BUG, with a known end: ksh93/ksh issue #951,
+# fixed upstream by commit 99028e9 (2026-03-23) on `dev`, in no release
+# yet (1.0.10, which Ubuntu ships, has it). Once every ksh muster may
+# meet carries that fix, the split is no longer NEEDED: owed_judge and
+# catchup_judge (which point here) could go back to calling the *_record
+# functions with >/dev/null. Keeping it costs nothing, so drop it only
+# deliberately, and prove it first: `test/run-shells` under the fixed ksh.
 survey_judge() {
   _sv_reset
   SV_EXPECT=$(_sv_cfg expect "$1") || SV_EXPECT=-
