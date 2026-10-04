@@ -1,0 +1,411 @@
+# shellcheck shell=sh
+# retro_lib - `muster retro`: the long view of a box, for a periodic
+# review (agreed with the user, 2026-10-04: a person and an agent look
+# back each quarter for patterns and for gaps worth closing). A
+# NAMESPACE, so its commands never crowd the daily verbs.
+#
+# Sourced by bin/muster, never executed. Under <state>/retro/:
+#
+#   events/<YYYY-Www>  one line per event, as it HAPPENS: t= class= kind=
+#                      origin= where= detail= [dur=]. Written by the verb
+#                      that acted, never converted from records later.
+#   tally/<YYYY-Www>   "<kind> <where> <n>" for what REPEATS without being
+#                      an event (runs, declines, files placed)
+#   open               the episodes now open: "<origin> <where> <since>
+#                      <verdict>", kept under a run's box lock
+#   reviewed           the epoch of the last `retro done`
+#
+# WEEKLY FILES, both kinds, so a week ages out WHOLE: a rolling year is
+# the last 53 files, pruning is deletion by name (never a rewrite another
+# process could be appending to), and a bad week cannot pollute a tally
+# forever. Anything that IS an event is counted from the events, so a
+# count has one source.
+#
+# A record that cannot be written never breaks the verb that acted; it
+# is said on stderr.
+
+# THE KINDS: one table, each kind with exactly one class. An emitted kind
+# missing here is recorded as unusual AND said on stderr; a test fails on
+# any kind the code can emit that is not here.
+#   action    muster changed something
+#   episode   something began, or stopped, needing a person
+#   unusual   should be rare: the review's main material
+RT_KINDS='action pulled
+action rebased
+action pushed
+action merged-back
+action captured
+episode needed-you
+episode settled
+unusual reverted
+unusual rebase-aborted
+unusual abort-failed
+unusual revert-failed
+unusual changed-underfoot
+unusual pull-failed
+unusual unseen
+unusual push-failed
+unusual displaced
+unusual could-not-run
+unusual lock-taken-over
+unusual notifier-failed'
+RT_WEEKS=53
+
+retro_dir() { printf '%s/retro' "$(_rn_state_dir)"; }
+
+_rt_week() {   # [<epoch>] -> 2026-W40, the ISO week (GNU or BSD date)
+  if [ -z "${1:-}" ]; then date +%G-W%V; return; fi
+  date -d "@$1" +%G-W%V 2>/dev/null || date -r "$1" +%G-W%V
+}
+
+_rt_class() {   # <kind> -> its class; undeclared is unusual, said aloud
+  _c_c=$(printf '%s\n' "$RT_KINDS" | awk -v k="$1" '$2 == k { print $1 }')
+  if [ -z "$_c_c" ]; then
+    echo "muster: retro: undeclared event kind '$1'" >&2
+    _c_c=unusual
+  fi
+  printf '%s' "$_c_c"
+}
+
+# _rt_append <sub> <line>: one line onto this week's file.
+_rt_append() {
+  _a_d=$(retro_dir)/$1
+  { mkdir -p "$_a_d" && printf '%s\n' "$2" >> "$_a_d/$(_rt_week)"; } \
+    2>/dev/null || echo "muster: retro: could not record to $_a_d" >&2
+}
+
+# retro_event <kind> <where> [<detail>] [<dur>]: the origin is RT_ORIGIN,
+# else MUSTER_ORIGIN (what `run` and `resolve` pass to the verbs they
+# start), else manual.
+retro_event() {
+  _rt_append events "$(printf 't=%s class=%s kind=%s origin=%s where=%s' \
+    "$(date +%s)" "$(_rt_class "$1")" "$1" \
+    "$(_sv_esc "${RT_ORIGIN:-${MUSTER_ORIGIN:-manual}}")" "$(_sv_esc "$2")")$(
+    printf ' detail=%s%s' "$(_sv_esc "${3:--}")" "${4:+ dur=$4}")"
+}
+
+retro_tally() {   # <kind> <where> [<n>]
+  _rt_append tally "$1 $(_sv_esc "$2") ${3:-1}"
+}
+
+# retro_prune: every week file older than a year goes, by name.
+retro_prune() {
+  _p_cut=$(_rt_week "$(( $(date +%s) - RT_WEEKS * 7 * 86400 ))")
+  for _p_f in "$(retro_dir)"/events/* "$(retro_dir)"/tally/*; do
+    [ -f "$_p_f" ] || continue
+    case ${_p_f##*/} in [0-9][0-9][0-9][0-9]-W[0-9][0-9]) ;; *) continue ;;
+    esac
+    awk -v a="${_p_f##*/}" -v b="$_p_cut" 'BEGIN { exit !(a < b) }' \
+      && rm -f "$_p_f"
+  done
+  return 0
+}
+
+# retro_cu_records <records>: what a catch-up or sync DID, from its own
+# porcelain: actions and the rare outcomes as events, declines as tally.
+retro_cu_records() {
+  printf '%s\n' "$1" | while IFS= read -r _r_l; do
+    [ -n "$_r_l" ] || continue
+    _r_n=$(_st_unesc "$(_st_field "$_r_l" name)")
+    _r_ft="$(_st_field "$_r_l" from)..$(_st_field "$_r_l" to)"
+    case $(_st_field "$_r_l" action):$(_st_field "$_r_l" result) in
+      pull:ok) retro_event pulled "$_r_n" "$_r_ft" ;;
+      rebase:ok) retro_event rebased "$_r_n" "$_r_ft" ;;
+      *:reverted) retro_event reverted "$_r_n" "$_r_ft" ;;
+      *:aborted) retro_event rebase-aborted "$_r_n" ;;
+      *:ABORT-FAILED) retro_event abort-failed "$_r_n" ;;
+      *:REVERT-FAILED) retro_event revert-failed "$_r_n" ;;
+      *:changed-underfoot) retro_event changed-underfoot "$_r_n" ;;
+      *:failed) retro_event pull-failed "$_r_n" ;;
+      *:unseen) retro_event unseen "$_r_n" ;;
+      none:in-use|none:touched|none:busy|rebase:diverged|none:diverged)
+        retro_tally "declined:$(_st_field "$_r_l" result)" "$_r_n" ;;
+    esac
+  done
+}
+
+# retro_run <profile> <verb> <records> <err> <exit>: what a stored run
+# adds, under its box lock: the tally of runs, a run that could not run,
+# the episodes it opened or closed, and those of placed config.
+retro_run() {
+  case $5 in 0) _u_s=ok ;; 1) _u_s=attention ;; *) _u_s=failed ;; esac
+  retro_tally "run:$_u_s" "$1"
+  # A run that could not run judged nothing, and may not even hold the
+  # box lock, so it records itself and touches no episode.
+  if [ "$5" -ge 2 ]; then
+    RT_ORIGIN=$1
+    retro_event could-not-run "$1" "$(grep . "$4" 2>/dev/null | head -n 1)"
+    RT_ORIGIN=
+    return 0
+  fi
+  _rt_episodes "$1" "$(_rn_flagged "$2" "$3" | awk '{ n = $1; $1 = ""
+    sub(/^ /, ""); gsub(/ /, "%20"); print n, $0 }')"
+  # A config fault's where is its path, its verdict its kind (for a
+  # `place` line, the verdict that follows it: shadowed, source-link).
+  _rt_episodes config "$(awk '{ v = ($1 == "place") ? $2 : $1
+      for (i = 2; i <= NF; i++) if ($i ~ /^\//) {
+        p = $i; sub(/:$/, "", p); print p, v; break } }' \
+    "$(_rn_config_store)" 2>/dev/null)"
+  retro_prune
+  RT_ORIGIN=
+}
+
+# _rt_episodes <origin> <"where verdict" lines now needing a person>:
+# began for each new one, settled (with its duration) for each that is
+# gone. One episode per where, however its verdict moves meanwhile.
+_rt_episodes() {
+  _o_f=$(retro_dir)/open
+  mkdir -p "$(retro_dir)" 2>/dev/null || return 0
+  [ -f "$_o_f" ] || : > "$_o_f"
+  # The open file is read in BEGIN, never as a first input file: with two
+  # inputs, `FNR == NR` stays true through the SECOND when the first is
+  # empty, which stored the current verdicts as garbage open episodes.
+  _o_out=$(printf '%s\n' "$2" | awk -v o="$1" -v now="$(date +%s)" \
+      -v f="$_o_f" '
+    BEGIN { while ((getline l < f) > 0) {
+        if (split(l, a, " ") < 4) continue
+        if (a[1] == o) { s[a[2]] = a[3]; v[a[2]] = a[4] } else k[++n] = l } }
+    NF { c[$1] = $2 }
+    END {
+      for (i = 1; i <= n; i++) print "keep", k[i]
+      for (w in c)
+        if (w in s) print "keep", o, w, s[w], v[w]
+        else { print "keep", o, w, now, c[w]; print "began", w, c[w] }
+      for (w in s) if (!(w in c)) print "settled", w, now - s[w], v[w]
+    }') || return 0
+  printf '%s\n' "$_o_out" | sed -n 's/^keep //p' > "$_o_f.$$" \
+    && mv -f "$_o_f.$$" "$_o_f"
+  # Set, not prefixed: an assignment in front of a FUNCTION call may or
+  # may not outlive it, depending on the shell. retro_run clears it.
+  RT_ORIGIN=$1
+  printf '%s\n' "$_o_out" | while read -r _o_k _o_w _o_a _o_b; do
+    case $_o_k in
+      began) retro_event needed-you "$(_st_unesc "$_o_w")" \
+               "$(_st_unesc "$_o_a")" ;;
+      settled) retro_event settled "$(_st_unesc "$_o_w")" \
+                 "$(_st_unesc "$_o_b")" "$_o_a" ;;
+    esac
+  done
+}
+
+# === reading it back ========================================================
+
+# RT_AWK: helpers every reader shares. Dates are UTC, computed here (no
+# process per line, and BSD has no `date -d`).
+RT_AWK='
+function ymd(t,  z, era, doe, yoe, y, doy, mp, d, m) {
+  z = int(t / 86400) + 719468; era = int(z / 146097)
+  doe = z - era * 146097
+  yoe = int((doe - int(doe / 1460) + int(doe / 36524) \
+    - int(doe / 146096)) / 365)
+  y = yoe + era * 400; doy = doe - (365 * yoe + int(yoe / 4) \
+    - int(yoe / 100))
+  mp = int((5 * doy + 2) / 153); d = doy - int((153 * mp + 2) / 5) + 1
+  m = mp < 10 ? mp + 3 : mp - 9; if (m <= 2) y++
+  return sprintf("%04d-%02d-%02d %02d:%02d", y, m, d,
+    int((t % 86400) / 3600), int((t % 3600) / 60))
+}
+function age(s) {
+  if (s < 120) return s "s"; if (s < 7200) return int(s / 60) "m"
+  if (s < 172800) return int(s / 3600) "h"; return int(s / 86400) "d"
+}
+function unesc(s) {
+  gsub(/%20/, " ", s); gsub(/%09/, " ", s); gsub(/%0A/, " ", s)
+  gsub(/%25/, "%", s); return s
+}
+function fields(line,  i, k, n, a) {
+  split("", F); n = split(line, a, " ")
+  for (i = 1; i <= n; i++) { k = a[i]; sub(/=.*/, "", k)
+    F[k] = a[i]; sub(/^[^=]*=/, "", F[k]) }
+}'
+
+# _rt_since <args...>: sets RT_SINCE (epoch) and RT_CLASS from --since
+# <age> (default 90d) and --class <c>; anything else is refused.
+_rt_since() {
+  RT_SINCE=$(( $(date +%s) - 7776000 )) RT_CLASS=
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --since) _s_s=$(_rn_seconds "${2:-}") \
+                 || { echo "muster retro: --since takes an age: 30m," \
+                        "36h, 90d" >&2; return 2; }
+               RT_SINCE=$(( $(date +%s) - _s_s )); shift ;;
+      --class) case ${2:-} in action|episode|unusual) RT_CLASS=$2 ;;
+                 *) echo "muster retro: --class is action, episode or" \
+                      "unusual" >&2; return 2 ;; esac; shift ;;
+      *) echo "muster retro: unknown argument '$1'" >&2; return 2 ;;
+    esac
+    shift
+  done
+}
+
+# _rt_cat <sub> <since>: the week files from the week of <since> on.
+_rt_cat() {
+  _t_from=$(_rt_week "$2")
+  for _t_f in "$(retro_dir)/$1"/*; do
+    [ -f "$_t_f" ] || continue
+    awk -v a="${_t_f##*/}" -v b="$_t_from" 'BEGIN { exit !(a >= b) }' \
+      && cat "$_t_f"
+  done
+}
+
+_rt_events() {   # [--since <age>] [--class <c>]
+  _rt_since "$@" || return 2
+  _rt_cat events "$RT_SINCE" | awk -v since="$RT_SINCE" -v cls="$RT_CLASS" \
+    "$RT_AWK"'
+    { fields($0) }
+    F["t"] + 0 < since + 0 || (cls != "" && F["class"] != cls) { next }
+    { printf "%s  %-8s %-18s %s (%s)%s%s\n", ymd(F["t"]), F["class"],
+        F["kind"], unesc(F["where"]), unesc(F["origin"]),
+        F["detail"] == "-" ? "" : "  " unesc(F["detail"]),
+        F["dur"] == "" ? "" : "  after " age(F["dur"]) }'
+}
+
+_rt_tally_show() {   # [--since <age>]
+  _rt_since "$@" || return 2
+  _rt_cat tally "$RT_SINCE" | awk '{ n[$1 " " $2] += $3 }
+    END { for (k in n) print k, n[k] }' | sort \
+    | awk "$RT_AWK"'{ printf "%-24s %-30s %s\n", $1, unesc($2), $3 }'
+}
+
+# _rt_show [--since <age>]: the review's view. Over the 50-line guideline
+# for the reason the renderers are: it is ONE awk program reading three
+# inputs (E events, T tallies, O open episodes), and splitting it would
+# split the one place that decides what a review sees.
+_rt_show() {
+  _rt_since "$@" || return 2
+  { _rt_cat events "$RT_SINCE" | sed 's/^/E /'
+    _rt_cat tally "$RT_SINCE" | sed 's/^/T /'
+    sed 's/^/O /' "$(retro_dir)/open" 2>/dev/null
+  } | awk -v since="$RT_SINCE" -v now="$(date +%s)" \
+      -v host="$(hostname 2>/dev/null || echo -)" \
+      -v rev="$(_rt_reviewed)" "$RT_AWK"'
+    $1 == "E" { sub(/^E /, ""); fields($0)
+      if (F["t"] + 0 < since + 0) next
+      w = unesc(F["where"]); o = unesc(F["origin"]); k = F["kind"]
+      # A ROW is a repo or a config file, decided by KIND: an unusual
+      # event about a profile or a notifier belongs in UNUSUAL only.
+      grp = (o == "config" || k == "merged-back" || k == "captured") \
+        ? "C" : "R"
+      if (F["class"] != "unusual") seen[grp, w] = 1
+      if (k == "needed-you") times[grp, w]++
+      else if (k == "settled") {
+        # "any yet" first: a 0s episode is still the longest of one.
+        if (!((grp, w) in long) || F["dur"] + 0 > long[grp, w] + 0) {
+          long[grp, w] = F["dur"]; why[grp, w] = unesc(F["detail"]) } }
+      else if (F["class"] == "action") act[grp, w, k]++
+      if (F["class"] == "unusual") {
+        uc[k]++; if (!(k in ufirst)) ufirst[k] = F["t"]; ulast[k] = F["t"]
+        if (index(" " uw[k] ",", " " w ",") == 0 && split(uw[k], x, ",") < 3)
+          uw[k] = uw[k] (uw[k] == "" ? "" : ", ") w }
+      next }
+    $1 == "T" { w = unesc($3)
+      if ($2 ~ /^run:/) { r = substr($2, 5); runs[w] += $4; rs[w, r] += $4 }
+      else if ($2 ~ /^declined:/) {
+        seen["R", w] = 1; d = substr($2, 10); dec[w, d] += $4; dk[d] = 1 }
+      next }
+    $1 == "O" { if (NF < 5) next
+      grp = ($2 == "config") ? "C" : "R"; w = unesc($3)
+      seen[grp, w] = 1; openw[grp, w] = now - $4; next }
+    function need(g, w,  s) {
+      s = (times[g, w] + 0) ""
+      if (long[g, w] != "") s = s ", longest " age(long[g, w]) \
+        " (" why[g, w] ")"
+      if ((g, w) in openw) s = s ", OPEN " age(openw[g, w])
+      return s == "0" ? "-" : s }
+    function decl(w,  d, s) { s = ""
+      for (d in dk) if (dec[w, d]) s = s (s == "" ? "" : ", ") dec[w, d] " " d
+      return s == "" ? "-" : s }
+    END {
+      printf "retro, %s, since %s UTC\n", host, ymd(since)
+      for (w in runs) printf "  runs of %s: %d (%d attention, %d could not" \
+        " run)\n", w, runs[w], rs[w, "attention"], rs[w, "failed"]
+      printf "\n%-16s %6s %7s %6s  %-24s %s\n", "REPO", "PULLED", "REBASED",
+        "PUSHED", "DECLINED", "NEEDED YOU"
+      for (sw in seen) { split(sw, p, SUBSEP); if (p[1] != "R") continue
+        w = p[2]; printf "%-16s %6d %7d %6d  %-24s %s\n", w,
+          act["R", w, "pulled"], act["R", w, "rebased"],
+          act["R", w, "pushed"], decl(w), need("R", w) }
+      n = 0; for (sw in seen) { split(sw, p, SUBSEP); if (p[1] == "C") n++ }
+      if (n) { printf "\n%-44s %7s %8s  %s\n", "CONFIG", "MERGED",
+          "CAPTURED", "NEEDED YOU"
+        for (sw in seen) { split(sw, p, SUBSEP); if (p[1] != "C") continue
+          w = p[2]; printf "%-44s %7d %8d  %s\n", w,
+            act["C", w, "merged-back"], act["C", w, "captured"],
+            need("C", w) } }
+      printf "\nUNUSUAL\n"; n = 0
+      for (k in uc) { n++; printf "  %-18s %3d  %s .. %s  %s\n", k, uc[k],
+          ymd(ufirst[k]), ymd(ulast[k]), uw[k] }
+      if (!n) print "  none"
+      printf "\nlast review: %s\n", rev == "" ? "never" : ymd(rev) " UTC"
+    }'
+}
+
+_rt_done() {
+  [ "$#" = 0 ] || { echo "usage: muster retro done" >&2; return 2; }
+  mkdir -p "$(retro_dir)" && date +%s > "$(retro_dir)/reviewed" \
+    || return 2
+  echo "review recorded; check will ask again in a quarter"
+}
+
+# _rt_reviewed: the epoch of the last review, or nothing.
+_rt_reviewed() { cat "$(retro_dir)/reviewed" 2>/dev/null | grep . || :; }
+
+# _rt_oldest: the epoch of the oldest event recorded, or nothing.
+_rt_oldest() {
+  for _o_f in "$(retro_dir)"/events/*; do
+    [ -f "$_o_f" ] || continue
+    sed -n '1s/^t=\([0-9]*\) .*/\1/p' "$_o_f"; return 0
+  done
+}
+
+_rt_status() {
+  _s_d=$(retro_dir)
+  [ -d "$_s_d" ] || { echo "nothing recorded yet ($_s_d)"; return 0; }
+  _s_o=$(_rt_oldest) _s_r=$(_rt_reviewed)
+  printf '%s\n' "${_s_o:-}" "${_s_r:-}" | awk "$RT_AWK"'
+    NR == 1 { o = $1 } NR == 2 { r = $1 }
+    END { print "record since:  " (o == "" ? "no events yet" : ymd(o) " UTC")
+          print "last review:   " (r == "" ? "never" : ymd(r) " UTC") }'
+  printf 'weeks kept:    %s events, %s tally (a rolling %s)\n' \
+    "$(find "$_s_d/events" -type f 2>/dev/null | wc -l | tr -d ' ')" \
+    "$(find "$_s_d/tally" -type f 2>/dev/null | wc -l | tr -d ' ')" \
+    "$RT_WEEKS weeks"
+  printf 'size:          %s KB\n' "$(du -sk "$_s_d" | awk '{ print $1 }')"
+}
+
+_rt_usage() {
+  cat <<'USAGE'
+usage: muster retro <command>
+
+The long view of this box, for a periodic review: events as they
+happened (action, episode, unusual) and weekly tallies of what repeats,
+each kept for a rolling year.
+
+  show [--since <age>]     by repo and by config file: what was pulled,
+                           pushed, declined and why, how often and how
+                           long something needed you; then the unusual
+                           events by kind, and the review status.
+                           Default --since 90d
+  events [--since <age>] [--class action|episode|unusual]
+                           the events themselves, oldest first
+  tally [--since <age>]    the repeating counts, summed
+  status                   how far back the record goes, its size, and
+                           when it was last reviewed
+  done                     record that a review happened; check notes
+                           when the last one is over a quarter old
+  help                     this text
+USAGE
+}
+
+retro_main() {
+  _m_c=${1:-help}; [ "$#" = 0 ] || shift
+  case $_m_c in
+    show) _rt_show "$@" ;;
+    events) _rt_events "$@" ;;
+    tally) _rt_tally_show "$@" ;;
+    status) [ "$#" = 0 ] || { _rt_usage >&2; return 2; }; _rt_status ;;
+    done) _rt_done "$@" ;;
+    help|-h|--help) _rt_usage ;;
+    *) _rt_usage >&2; return 2 ;;
+  esac
+}

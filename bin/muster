@@ -58,6 +58,10 @@ MUSTER_LIB=$(CDPATH='' cd -- "$(dirname -- "$_self")/../lib" && pwd -P) \
   || { echo "muster: $MUSTER_LIB/push_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/push_lib
 . "$MUSTER_LIB/push_lib"
+[ -f "$MUSTER_LIB/retro_lib" ] \
+  || { echo "muster: $MUSTER_LIB/retro_lib is missing" >&2; exit 2; }
+# shellcheck source=SCRIPTDIR/../lib/retro_lib
+. "$MUSTER_LIB/retro_lib"
 [ -f "$MUSTER_LIB/resolve_lib" ] \
   || { echo "muster: $MUSTER_LIB/resolve_lib is missing" >&2; exit 2; }
 # shellcheck source=SCRIPTDIR/../lib/resolve_lib
@@ -160,6 +164,11 @@ commands:
          which source a destination comes from, or the reverse
   displaced [list | clear <run> <path>... | clear --all]
          the live edits kept aside by place; a check fault until cleared
+  retro  <command>
+         the LONG VIEW, for a periodic review: what was pulled, pushed
+         and declined, what needed you and for how long, and the unusual
+         events, kept for a rolling year. `muster retro help` lists its
+         commands (show, events, tally, status, done)
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
@@ -187,6 +196,7 @@ case ${1:-} in
   diff) shift; diff_main "$@" ;;
   where) shift; where_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
+  retro) shift; retro_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;
   *) echo "muster: unknown command '$1'" >&2; usage >&2; exit 2 ;;

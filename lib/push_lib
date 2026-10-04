@@ -114,6 +114,7 @@ _pu_one() {
     return 1
   fi
   printf '%-10s %s  %.12s..%.12s\n' pushed "$1" "$_o_was" "$3"
+  retro_event pushed "$1" "$(printf '%.12s..%.12s' "$_o_was" "$3")"
 }
 
 # _pu_act <candidates>: push each, the commit listed for it.
@@ -126,7 +127,11 @@ _pu_act() {
       # The commit is fixed FIRST: what is shown is exactly what goes.
       _a_sha=$(git -C "$_a_p" rev-parse -q --verify HEAD) || _a_sha=
       _pu_show "$_a_n" "$_a_p" "$_a_sha" | tail -n +2
-      _pu_one "$_a_n" "$_a_p" "$_a_sha" || _a_bad=1
+      if ! _o_line=$(_pu_one "$_a_n" "$_a_p" "$_a_sha"); then
+        _a_bad=1
+        retro_event push-failed "$_a_n" "${_o_line#FAILED     }"
+      fi
+      printf '%s\n' "$_o_line"
     done
     exit "$_a_bad"
   )

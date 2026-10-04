@@ -41,8 +41,8 @@ _rs_repos() {
   _r_dry=$1; shift
   echo "== repos"
   _r_rc=0
-  _r_out=$("$MUSTER_BIN" catch-up --porcelain ${_r_dry:+--dry-run} -- "$@" \
-    </dev/null) || _r_rc=$?
+  _r_out=$(MUSTER_ORIGIN=resolve "$MUSTER_BIN" catch-up --porcelain \
+    ${_r_dry:+--dry-run} -- "$@" </dev/null) || _r_rc=$?
   if [ "$_r_rc" -ge 2 ]; then
     echo "FAILED     catch-up could not run (exit $_r_rc)"; RS_BROKE=1
     return 0
@@ -85,7 +85,8 @@ RECORDS
 _rs_config() {
   printf '\n== config\n'
   _c_rc=0
-  _c_out=$("$MUSTER_BIN" place ${1:+--dry-run} </dev/null) || _c_rc=$?
+  _c_out=$(MUSTER_ORIGIN=resolve "$MUSTER_BIN" place ${1:+--dry-run} \
+    </dev/null) || _c_rc=$?
   if [ -n "$_c_out" ]; then printf '%s\n' "$_c_out"
   else echo "nothing to place"
   fi
@@ -224,9 +225,11 @@ _rs_push() {
   if [ -n "$_h_dry" ]; then
     "$MUSTER_BIN" push --dry-run -- "$@" </dev/null || _h_rc=$?
   elif [ "$#" -gt 0 ]; then
-    "$MUSTER_BIN" push --no-refresh -- "$@" </dev/null || _h_rc=$?
+    MUSTER_ORIGIN=resolve "$MUSTER_BIN" push --no-refresh -- "$@" \
+      </dev/null || _h_rc=$?
   else
-    "$MUSTER_BIN" push --no-refresh --all </dev/null || _h_rc=$?
+    MUSTER_ORIGIN=resolve "$MUSTER_BIN" push --no-refresh --all \
+      </dev/null || _h_rc=$?
   fi
   [ "$_h_rc" -lt 2 ] || RS_BROKE=1
 }

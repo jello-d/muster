@@ -109,6 +109,22 @@ _ck_stores() {
   done
 }
 
+# _ck_retro: whether a review is due: the record covers more than a
+# quarter and no `muster retro done` falls in the last one. The cadence
+# agreed with the user as DATA rather than as a note to remember: a
+# decision recorded only in prose is one that silently does not happen.
+_ck_retro() {
+  _r_o=$(_rt_oldest)
+  [ -n "$_r_o" ] || return 0
+  _r_q=$(( $(date +%s) - 92 * 86400 ))
+  [ "$_r_o" -lt "$_r_q" ] || return 0
+  _r_r=$(_rt_reviewed)
+  if [ -z "$_r_r" ] || [ "$_r_r" -lt "$_r_q" ]; then
+    printf '%s\n' "no review in over a quarter: muster retro show, then" \
+      "muster retro done"
+  fi
+}
+
 # _ck_runs <status-line>: a driven profile whose runs are not happening,
 # or whose last run could not run, is a fault no install repairs.
 _ck_runs() {
@@ -155,6 +171,8 @@ HOLDS
   done <<STORES
 $_c_os
 STORES
+  _c_rv=$(_ck_retro)
+  [ -z "$_c_rv" ] || _ck_add note "retro      $_c_rv"
   _c_ov=$(_rn_overlaps)
   while read -r _c_a _c_b _c_r; do
     [ -z "$_c_r" ] \

@@ -152,6 +152,7 @@ _rn_lock() {
     return 1
   fi
   echo "muster: taking over a stale lock (pid ${_l_pid:-unknown})" >&2
+  retro_event lock-taken-over "${1##*/}" "pid ${_l_pid:-unknown}"
   echo $$ > "$1/lock/pid"
 }
 
@@ -173,6 +174,7 @@ _rn_box_lock() {
     _b_pid=$(cat "$1/pid" 2>/dev/null) || _b_pid=
     if [ -n "$_b_pid" ] && ! kill -0 "$_b_pid" 2>/dev/null; then
       echo "muster: taking over a stale box lock (pid $_b_pid)" >&2
+      retro_event lock-taken-over box "pid $_b_pid"
       break
     fi
     [ "$_b_t" -lt "$_b_wait" ] || return 1
@@ -326,13 +328,15 @@ _rn_notify() {
   _n_p=$1; _n_verb=$2; shift 2
   "$_n_cmd" "$_n_verb" "muster-$_n_p" ${1+"$*"} \
     >/dev/null 2>&1 </dev/null \
-    || echo "muster: notifier $_n_cmd $_n_verb failed" >&2
+    || { echo "muster: notifier $_n_cmd $_n_verb failed" >&2
+         retro_event notifier-failed "$_n_cmd" "$_n_verb muster-$_n_p"; }
 }
 
 # _rn_invoke <profile>: the verb, over the profile's selection. A run that
 # must not happen (an empty selection, an overlap) fails with exit 2 and a
 # reason, and is STORED like any other, so report shows it as failed.
 _rn_invoke() {
+  _i_p=$1   # kept: `set --` below replaces the positional parameters
   if _rn_acting "$RN_VERB" \
     && _i_ov=$(_rn_overlaps | awk -v p="$1" '$1 == p || $2 == p') \
     && [ -n "$_i_ov" ]; then
@@ -340,7 +344,10 @@ _rn_invoke() {
     printf ' the same repo(s):\n%s\n' "$_i_ov"
     return 2
   fi >&2
-  [ -n "$RN_SEL" ] || { "$MUSTER_BIN" "$RN_VERB" --porcelain; return; }
+  # MUSTER_ORIGIN: the verb records its own actions in retro, as this
+  # profile's. Set on an EXTERNAL command, so it cannot outlive the call.
+  [ -n "$RN_SEL" ] || {
+    MUSTER_ORIGIN=$1 "$MUSTER_BIN" "$RN_VERB" --porcelain; return; }
   # shellcheck disable=SC2086  # selectors are words
   _i_names=$(_rn_expand $RN_SEL)
   if [ -z "$_i_names" ]; then
@@ -355,7 +362,7 @@ _rn_invoke() {
   # shellcheck disable=SC2086  # one name per line, split on newline
   set -- $_i_names
   IFS=$_i_old
-  "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
+  MUSTER_ORIGIN=$_i_p "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
 }
 
 # CONFIG FAULTS REACH THE BANNER (agreed with the user, 2026-10-03). A
@@ -401,7 +408,8 @@ _rn_config_notify() {
       || _cn_v=failed
   fi
   [ "$_cn_v" != failed ] \
-    || echo "muster: notifier $_cn_cmd failed for muster.config" >&2
+    || { echo "muster: notifier $_cn_cmd failed for muster.config" >&2
+         retro_event notifier-failed "$_cn_cmd" muster.config; }
 }
 
 # _rn_report_config: report's config section, from the store.
@@ -456,6 +464,7 @@ _rn_run_locked() {
     : > "$3.records"
     printf '%s %s\n' "muster: another muster run held this box for" \
       "${MUSTER_RUN_WAIT:-600}s; this run did not run" > "$3.err"
+    retro_run "$1" "$RN_VERB" "$3.records" "$3.err" 2
     return 2
   fi
   # Holding it now, so the cleanup may release it; armed only once held,
@@ -468,6 +477,7 @@ _rn_run_locked() {
   # Still holding the box: the refs as this run LEFT them.
   _rn_heads "$3.records" >"$3.heads" 2>/dev/null || :
   _rn_config_scan
+  retro_run "$1" "$RN_VERB" "$3.records" "$3.err" "$_q_rc"
   # Released: disarm the box paths FIRST, so an interruption from here on
   # cannot remove a lock another run has taken in the meantime.
   # shellcheck disable=SC2064  # expanding now is the point

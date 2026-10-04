@@ -367,5 +367,9 @@ catchup_main() {
     || { echo "muster: catch-up itself failed" >&2; return 2; }
   [ -n "$_m_out" ] \
     || { echo "muster: no repos found under $SV_ROOT" >&2; return 2; }
+  # Retro: what this run DID, recorded once, here, by the verb that did
+  # it (a timer's run passes its profile in MUSTER_ORIGIN). A dry run did
+  # nothing, so it records nothing.
+  [ -n "$CU_DRY" ] || retro_cu_records "$_m_out"
   printf '%s\n' "$_m_out" | _cu_render "$SV_MODE"
 }

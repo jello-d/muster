@@ -82,6 +82,7 @@ installs through.
     muster resolve                everything safe, then what needs you
     muster push                   what would be pushed, commit by commit
     muster push --all             push it (or: muster push mux tackup)
+    muster retro show             the long view, for a periodic review
     muster run <profile>          run a profile and store the result
     muster report                 every profile's latest run, in one view
     muster schedule install       systemd user timers for the profiles
@@ -311,6 +312,49 @@ never retried. It holds the box lock, then re-runs every profile so
 
 Exit 0 nothing owed a push (or all of it went), 1 something still owes
 one or was refused, 2 a push failed or could not run.
+
+### retro: the long view, for a periodic review
+
+    muster retro show [--since 90d]
+    muster retro events [--since <age>] [--class action|episode|unusual]
+    muster retro tally [--since <age>]
+    muster retro status | done | help
+
+A NAMESPACE, kept apart from the daily verbs on purpose: it is the
+record a person (and an agent working with them) reads every quarter or
+so, looking for patterns on this box and for gaps worth closing. Kept
+under `<state>/retro/`, for a rolling year:
+
+- EVENTS, written as they happen, by the verb that acted, each with ONE
+  class from one table in the code (a test fails on any kind the code
+  can emit that the table does not declare):
+
+      action    muster changed something: pulled, rebased, pushed,
+                merged-back, captured
+      episode   something began needing you (needed-you) or stopped
+                (settled, with how long it lasted). A repo diverged for
+                47 runs is two events and a duration, not 47 lines
+      unusual   should be rare, and is the review's main material: a
+                rebase reverted or an abort failed, changed-underfoot, a
+                failed pull or push, unseen, a displaced edit, a run that
+                could not run, a stale lock taken over, a notifier that
+                failed
+
+- TALLIES of what repeats without being an event: runs per profile,
+  declines by reason per repo, files placed.
+
+Both live in one file per ISO week, so a week ages out WHOLE after a
+year (deletion by name, never a rewrite), and nothing in the record can
+pollute a total forever. A count has one source: anything that is an
+event is counted from the events. `show` reads them back by repo and by
+config file (pulled, rebased, pushed, declined and why, how often and
+how long each needed you), then the unusual events by kind with first
+and last seen, then when the box was last reviewed. Times are UTC.
+
+`retro done` records a review, and `muster check` notes when the record
+covers more than a quarter with no review in it: the cadence is data,
+not a reminder. A timer's run tags what it records with its profile; a
+command typed by hand is `manual`, and `resolve` tags its own.
 
 ### Profiles, run and report
 

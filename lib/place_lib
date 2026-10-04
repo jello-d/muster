@@ -472,6 +472,7 @@ _pl_displace() {
   _x_to=$(_pl_state)/displaced/$PL_RUN$1
   _pl_put "$1" "$_x_to" || return 1
   printf 'displaced  %s -> %s\n' "$1" "$_x_to"
+  retro_event displaced "$1" "$_x_to"
 }
 
 # _pl_act_one: carry out PL_V for the file the PL_ globals describe.
@@ -552,6 +553,7 @@ _pl_place_cb() {
   fi
   if [ -n "$PL_DRY" ]; then printf 'would %-10s %s\n' "$PL_V" "$PL_D"
   elif _pl_act_one; then printf '%-10s %s\n' "$PL_V" "$PL_D"
+    retro_tally "placed:$PL_V" "$PL_D"
   else printf 'FAILED     %s %s\n' "$PL_V" "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
@@ -578,6 +580,7 @@ _pl_merge_cb() {
     "$PL_D" "$PL_S"; return 0; fi
   if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
     printf 'merged     %s -> %s\n' "$PL_D" "$PL_S"
+    retro_event merged-back "$PL_D"
   else printf 'FAILED     merge-back %s\n' "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
@@ -601,6 +604,7 @@ _pl_migrate_cb() {
   _pl_verdict "$PL_SR" "$PL_DR" "$PL_RP" "${PL_D#"$PL_DR"/}"
   _pl_drift_verdict "$PL_V" || return 0
   if _pl_act_one; then printf '%-10s %s\n' "$PL_V" "$PL_D"
+    retro_tally "placed:$PL_V" "$PL_D"
   else printf 'FAILED     %s %s\n' "$PL_V" "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
@@ -682,6 +686,7 @@ _pl_capture_cb() {
     "$PL_D" "$PL_S"; return 0; fi
   if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
     printf 'captured   %s -> %s\n' "$PL_D" "$PL_S"
+    retro_event captured "$PL_D"
   else printf 'FAILED     capture %s\n' "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
