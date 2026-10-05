@@ -114,8 +114,8 @@ commit_file "$ROOT/spaced" "a b" "mine" mine
 owed spaced
 expect spaced owed escalate
 expect spaced overlap a%20b
-assert "spaced: the record still has 9 fields" \
-  test "$(rec spaced | awk '{print NF}')" -eq 9
+assert "spaced: the record still has 10 fields" \
+  test "$(rec spaced | awk '{print NF}')" -eq 10
 
 # === what it could not establish is unknown, never a guess ===================
 
@@ -388,7 +388,7 @@ assert "R10: each record's owed list is on its table row" \
     printf '%s\n' "$OUTT" | awk -v n="$_nm" -v o="$_ow" \
       '$1 == n && $2 == o { f = 1 } END { exit !f }' || echo "$_nm"
   done)"
-KEYS='name owed state ahead behind fetched overlap artifacts path'
+KEYS='name owed state ahead behind fetched overlap artifacts reseed_since path'
 assert "every record carries every key, in order" \
   test -z "$(printf '%s\n' "$OUTP" | awk -v want="$KEYS" '{
     s = ""
@@ -414,5 +414,75 @@ done
 . "$HERE/../lib/owed_lib"
 printf 'garbage\n' | _ow_render porcelain >/dev/null 2>&1
 assert "a malformed record fails the render" test "$?" = 1
+
+# === a pending re-seed is ONE item, and not attention for its grace =======
+# A canonical change makes every copy differ at once, on every box: as
+# sixteen rows each, that was 48 alerts for one task. Now one item, and
+# none until the change is older than `reseed-grace` (default 60m).
+mkrepo rnotes
+commit_file "$ROOT/rnotes" _rc "v1" canon
+g "$ROOT/rnotes" push
+for _r in rs1 rs2 rsmix; do
+  mkrepo "$_r"
+  commit_file "$ROOT/$_r" test/rc.t "v1" seed
+  g "$ROOT/$_r" push
+done
+commit_file "$ROOT/rsmix" other "x" "unpushed work"
+printf 'artifact %s test/rc.t\n' "$ROOT/rnotes/_rc" > "$C/rs"
+rso() { OUT=$(MUSTER_CONFIG=$C/rs "$MUSTER" owed "$@" rnotes rs1 rs2 rsmix \
+  2>"$_T/err" </dev/null); RC=$?; }
+commit_file "$ROOT/rnotes" _rc "v2" "canonical, just now"
+g "$ROOT/rnotes" push
+rso --porcelain --no-fetch
+expect rs1 owed reseed
+expect rs1 reseed_since "$(git -C "$ROOT/rnotes" log -1 --format=%ct -- _rc)"
+expect rsmix owed push,reseed
+rso --no-fetch
+assert "within the grace: one line for the re-seeds" \
+  has "$OUT" "vendored-copies: 2 repo(s) await a re-seed"
+assert "within the grace: no row for a re-seed-only repo" \
+  test -z "$(printf '%s\n' "$OUT" | grep '^rs1 ')"
+assert "a repo owing a re-seed AND a push keeps its own row" \
+  has "$(printf '%s\n' "$OUT" | grep '^rsmix ')" "push,reseed"
+# Past the grace: the canonical's change is two hours old.
+printf 'v3\n' > "$ROOT/rnotes/_rc"
+g "$ROOT/rnotes" add _rc
+GIT_COMMITTER_DATE="@$(( $(date +%s) - 7200 )) +0000" \
+  git -C "$ROOT/rnotes" commit -q -m "canonical, two hours ago"
+g "$ROOT/rnotes" push
+g "$ROOT/rsmix" push
+rso --no-fetch
+expect_rc 1 "past the grace: a re-seed is attention"
+# rsmix's commit was pushed above, so it owes only the re-seed now: 3.
+assert "past the grace: ONE item, with its count and age" \
+  has "$OUT" "vendored-copies: 3 repo(s) carry a copy that differs"
+assert "past the grace: says how old" has "$OUT" "changed 2h ago"
+assert "past the grace: still no per-repo row" \
+  test -z "$(printf '%s\n' "$OUT" | grep '^rs1 ')"
+rso --porcelain --no-fetch
+assert "porcelain keeps every record" \
+  test "$(printf '%s\n' "$OUT" | grep -c 'owed=reseed ')" -ge 2
+# Through a stored run: report counts ONE item, not one per repo.
+printf 'artifact %s test/rc.t\nprofile rs owed 1h rnotes rs1 rs2\n' \
+  "$ROOT/rnotes/_rc" > "$C/rsp"
+MUSTER_CONFIG=$C/rsp "$MUSTER" run rs >/dev/null 2>&1
+OUT=$(MUSTER_CONFIG=$C/rsp "$MUSTER" report --porcelain 2>/dev/null)
+assert "report: ONE item needs attention, not two" \
+  has "$OUT" "attention=1 "
+# The same rule in catch-up's and sync's records (one renderer rule).
+OUT=$(MUSTER_CONFIG=$C/rs "$MUSTER" sync rnotes rs1 rs2 2>/dev/null); RC=$?
+expect_rc 1 "sync: a re-seed past the grace is attention there too"
+assert "sync: ONE item" has "$OUT" "vendored-copies: 2 repo(s) carry"
+assert "sync: no per-repo row" test -z "$(printf '%s\n' "$OUT" | grep '^rs1 ')"
+# The grace is the integrator's to set.
+printf 'artifact %s test/rc.t\nreseed-grace 3h\n' "$ROOT/rnotes/_rc" \
+  > "$C/rs"
+rso --no-fetch
+expect_rc 0 "reseed-grace 3h: the two-hour-old change is not yet attention"
+for _bad in 'reseed-grace 3w' 'reseed-grace' 'reseed-grace 1h 2h'; do
+  printf '%s\n' "$_bad" > "$C/rsbad"
+  OUT=$(MUSTER_CONFIG=$C/rsbad "$MUSTER" owed --no-fetch rs1 2>&1); RC=$?
+  expect_rc 2 "a bad reseed-grace line: $_bad"
+done
 
 h_verdict

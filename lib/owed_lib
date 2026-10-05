@@ -130,8 +130,10 @@ _ow_canon_status() {
 }
 
 # _ow_canon_load [name...]: every `artifact` line, with its canonical's
-# status and whether an unknown copy should ROLL UP, into OW_ARTLIST as
-# "<status> <roll:y|n> <canonical> <relpath>..." lines. Once per run.
+# status, whether an unknown copy should ROLL UP, and when the canonical
+# last changed (its last commit, epoch, or -), into OW_ARTLIST as
+# "<status> <roll:y|n> <changed> <canonical> <relpath>..." lines. Once
+# per run.
 #
 # ONE PROBLEM, ONE ROW. A canonical whose checkout is behind (the normal
 # state of a notes repo that moves all day) makes every copy of it
@@ -160,7 +162,9 @@ _ow_canon_load() {
     [ "$_l_st" = ok ] || printf '%s %s %s\n' "muster: canonical" \
       "$_l_canon is $_l_st, so its copies are unknown rather than judged" \
       "against it" >&2
-    OW_ARTLIST="$OW_ARTLIST$_l_st $_l_roll $_l_canon $_l_rels
+    _l_ct=$(GIT_OPTIONAL_LOCKS=0 git -C "$(dirname -- "$_l_canon")" log -1 \
+      --format=%ct -- "$(basename -- "$_l_canon")" 2>/dev/null) || _l_ct=
+    OW_ARTLIST="$OW_ARTLIST$_l_st $_l_roll ${_l_ct:--} $_l_canon $_l_rels
 "
   done < "$SV_CONFIG"
 }
@@ -213,13 +217,21 @@ _ow_optin() {
 # _ow_artifacts <repo>: every vendored file it has opted into (above).
 # A pull verdict does not roll up: the git half already says pull.
 _ow_artifacts() {
-  OW_ARTS=
-  while read -r _a_st _a_roll _a_canon _a_rels; do
+  OW_ARTS='' OW_RSINCE=-
+  while read -r _a_st _a_roll _a_ct _a_canon _a_rels; do
     [ -n "$_a_st" ] || continue
     # shellcheck disable=SC2086  # relpaths are words, split on purpose
     _a_rel=$(_ow_optin "$1" $_a_rels) || continue
     _a_v=$(_ow_art_verdict "$1" "$_a_rel" "$_a_canon" "$_a_st")
     OW_ARTS="${OW_ARTS:+$OW_ARTS,}$_a_rel:$_a_v"
+    # reseed_since: when the canonical last changed, the oldest such time
+    # over this repo's re-seeds, so the grace runs from the change that
+    # has waited longest. A canonical changed TWICE with no re-seed
+    # between counts from its second change: at most one grace late.
+    if [ "$_a_v" = reseed ] && [ "$_a_ct" != - ] \
+      && { [ "$OW_RSINCE" = - ] || [ "$_a_ct" -lt "$OW_RSINCE" ]; }; then
+      OW_RSINCE=$_a_ct
+    fi
     case $_a_v in
       reseed|skip) _ow_add "$_a_v" ;;
       unknown) [ "$_a_roll" = n ] || _ow_add unknown ;;
@@ -247,9 +259,59 @@ owed_record() {
   printf 'name=%s owed=%s state=%s ahead=%s behind=%s fetched=%s' \
     "$(_sv_esc "$1")" "$OW_LIST" "$SV_STATE" "$SV_AHEAD" "$SV_BEHIND" \
     "$SV_FETCHED"
-  printf ' overlap=%s artifacts=%s path=%s\n' \
-    "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$(_sv_esc "$2")"
+  printf ' overlap=%s artifacts=%s reseed_since=%s path=%s\n' \
+    "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$OW_RSINCE" "$(_sv_esc "$2")"
 }
+
+# A PENDING RE-SEED IS ONE TASK, not sixteen alerts (agreed with the user,
+# 2026-10-05). A canonical change makes every vendored copy differ at
+# once, on every box, until ONE box re-seeds and commits each repo and
+# the others pull: measured, that was 16 rows on each of three boxes for
+# every change, four changes in four days. So a row whose ONLY debt is a
+# re-seed (and, in a catch-up record, that nothing was done to) folds
+# into ONE `vendored-copies` item, and it is attention only once the
+# canonical change is older than `reseed-grace` (default 60m): within it
+# a sweep is normally under way, and the other boxes just pull. A repo
+# owing a re-seed AND anything else stays its own row. Porcelain keeps
+# every record. One rule, here, for both renderers.
+#
+# _ow_grace: the grace, in seconds.
+_ow_grace() {
+  _g_a=$(_sv_cfg_all reseed-grace | head -n 1)
+  if [ -n "$_g_a" ] && _g_s=$(_rn_seconds "$_g_a"); then printf '%s' "$_g_s"
+  else printf '%s' 3600
+  fi
+}
+OW_RESEED_AWK='
+function rs_take(list, since) {
+  if (list != "reseed") return 0
+  if (since ~ /^[0-9]+$/ && now - since < grace) {
+    rs_young++; if (since + 0 > rs_new + 0) rs_new = since
+  } else {
+    rs_due++; if (rs_old == "" || since + 0 < rs_old + 0) rs_old = since
+  }
+  return 1
+}
+function rs_dur(s) {
+  if (s < 120) return s "s"; if (s < 7200) return int(s / 60) "m"
+  if (s < 172800) return int(s / 3600) "h"; return int(s / 86400) "d"
+}
+function rs_flagged() {
+  if (rs_due) printf "name=vendored-copies owed=reseed remaining=reseed" \
+    " result=- state=- count=%d reseed_since=%s\n", rs_due, rs_old
+}
+function rs_line(attn) {
+  if (rs_due)
+    printf "\nvendored-copies: %d repo(s) carry a copy that differs from" \
+      " its canonical, changed %s ago (past the %s grace): re-seed them" \
+      " from the canonical, one task on one box, then a commit per" \
+      " repo\n", rs_due, rs_old ~ /^[0-9]+$/ ? rs_dur(now - rs_old) : "?",
+      rs_dur(grace)
+  if (rs_young && !attn)
+    printf "\nvendored-copies: %d repo(s) await a re-seed of a canonical" \
+      " changed %s ago; not attention until %s: a sweep is likely under" \
+      " way\n", rs_young, rs_dur(now - rs_new), rs_dur(grace)
+}'
 
 # _ow_render <porcelain|table|attention>: records on stdin; exits 1 unless
 # every repo is owed nothing, so the status is computed from the records
@@ -257,7 +319,8 @@ owed_record() {
 # one awk program, and splitting it would split the renderer. attention: the
 # table, only the rows that fail the run.
 _ow_render() {
-  awk -v mode="$1" -v now="$(date +%s)" '
+  awk -v mode="$1" -v now="$(date +%s)" -v grace="$(_ow_grace)" \
+    "$OW_RESEED_AWK"'
     function age(t, d) {
       if (t == "-" || t == "never") return t
       d = now - t
@@ -295,6 +358,10 @@ _ow_render() {
         bad = 1
         next
       }
+      if (rs_take(f["owed"], f["reseed_since"])) {
+        if (mode == "porcelain") print
+        next
+      }
       # held alone is not attention: being behind is the point of it.
       rb = (f["owed"] != "nothing" && f["owed"] != "held")
       if (rb) bad = 1
@@ -315,6 +382,10 @@ _ow_render() {
         printf fmt, "REPO", "OWED", "FETCHED", "WHY"
         for (i = 1; i <= n; i++) printf fmt, nm[i], ow[i], fe[i], wy[i]
       }
+      if (rs_due) bad = 1
+      if (mode == "flagged") rs_flagged()
+      if (mode == "table") rs_line(0)
+      if (mode == "attention") rs_line(1)
       exit bad + 0
     }'
 }

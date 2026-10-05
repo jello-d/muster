@@ -175,6 +175,17 @@ run) does an unknown copy make its repo `unknown`.
 Record: `name owed state ahead behind fetched overlap artifacts path`,
 with `artifacts` a comma list of `<relpath>:<verdict>`.
 
+A PENDING RE-SEED IS ONE ITEM. A canonical change makes every vendored
+copy differ at once, on every box, until one box re-seeds and commits
+each repo and the others pull, so as rows it was sixteen alerts per box
+for one task. A repo whose only debt is `reseed` (in catch-up and sync,
+one nothing was done to) folds into a single `vendored-copies` line,
+and it is attention only once the canonical's last change is older than
+`reseed-grace` (default 60m): within that a sweep is normally under
+way. A repo owing a re-seed AND anything else keeps its own row, and
+`--porcelain` keeps every record, with `reseed_since` (the epoch of the
+canonical change it awaits).
+
 ### catch-up
 
 Acts on owed's `pull` and `rebase` verdicts and nothing else. It fetches,
@@ -653,6 +664,9 @@ muster surveys every git repo one level under `~/src`.
                              the relpaths, AND one of the `requires`
                              paths when given (a repo with a hook of its
                              own has not adopted the vendored hook)
+    reseed-grace <age>       how long a canonical change may wait for its
+                             re-seed before it is attention (default
+                             60m); until then it is one line, not alarm
     keep <age>               how long each run's full records are kept
                              (30m, 36h, 14d; default 7d). By age, so it
                              means the same span at any cadence
