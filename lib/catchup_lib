@@ -178,14 +178,24 @@ _cu_busy() {
   return 1
 }
 
-# _cu_touched <path>: is a tracked file newer than HEAD's reflog? With no
-# reflog to compare against, it cannot tell, and says touched.
+# _cu_touched <path>: is a tracked file newer than the INDEX, which git
+# writes LAST whenever it lays the tree down (a clone, a checkout, a
+# merge), so "newer" means touched since? With no index it cannot tell,
+# and says touched.
+#
+# NOT HEAD's reflog, which it was: `git clone` writes the reflog BEFORE
+# it checks the files out, so every tracked file of a fresh clone was
+# newer than it, and sync declined every fresh clone as `touched`,
+# forever, until a person moved HEAD (live on a new box, 2026-10-04: all
+# sixteen repos, five hours). The one blind spot: a PLAIN `git status`
+# (a git-aware prompt) re-caches the index and hides a touch. A prompt
+# means a shell inside the repo, which `in-use` catches.
 _cu_touched() {
-  _t_log=$(_sv_git "$1" rev-parse --git-path logs/HEAD) || return 0
-  case $_t_log in /*) ;; *) _t_log=$1/$_t_log ;; esac
-  [ -f "$_t_log" ] || return 0
+  _t_ix=$(_sv_git "$1" rev-parse --git-path index) || return 0
+  case $_t_ix in /*) ;; *) _t_ix=$1/$_t_ix ;; esac
+  [ -f "$_t_ix" ] || return 0
   _t_new=$(cd "$1" && find . -path ./.git -prune -o -type f \
-    -newer "$_t_log" -print 2>/dev/null | sed 's|^\./||')
+    -newer "$_t_ix" -print 2>/dev/null | sed 's|^\./||')
   [ -n "$_t_new" ] || return 1
   _sv_git "$1" -c core.quotePath=false ls-files \
     | awk 'NR == FNR { t[$0] = 1; next } ($0 in t) { f = 1 }

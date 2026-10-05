@@ -78,8 +78,11 @@ mkrepo touched; upstream_moves touched
 _t_was=$(head_of "$ROOT/touched")
 sleep 1
 touch "$ROOT/touched/f"
+# Lock-free, as muster reads: a PLAIN status re-caches the index, which
+# is what hides a touch from a git-aware prompt (and from this test).
 assert "touched: the tree is CLEAN (catch-up would pull it)" \
-  test -z "$(git -C "$ROOT/touched" status --porcelain)"
+  test -z "$(GIT_OPTIONAL_LOCKS=0 git -c diff.autoRefreshIndex=false \
+    -C "$ROOT/touched" status --porcelain)"
 sy touched
 expect touched action none
 expect touched result touched
@@ -98,6 +101,18 @@ mkdir -p "$ROOT/ign/out"
 echo built > "$ROOT/ign/out/x"
 sy ign
 expect ign result ok
+
+# === a FRESH CLONE is not touched ==========================================
+# git writes a clone's reflog BEFORE its checkout, so its files are all
+# newer than the reflog: read against that, every fresh clone was
+# `touched` and never pulled (live on a new box: sixteen repos, hours).
+mkrepo cloned
+git clone -q "$_T/origins/cloned.git" "$ROOT/fresh" 2>/dev/null
+upstream_moves cloned
+g "$ROOT/fresh" fetch
+sy fresh
+expect fresh action pull
+expect fresh result ok
 
 # === busy: a git operation left open =======================================
 mkrepo busy; upstream_moves busy
