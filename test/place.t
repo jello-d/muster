@@ -439,7 +439,10 @@ g "$TK" add -A; g "$TK" commit -m rootsrc
 ln -s "$RS" "$RD"
 RCFG=$_T/rcfg
 printf 'place %s %s user-editable\n' "$RS" "$RD" > "$RCFG"
-rpl() { OUT=$(MUSTER_CONFIG=$RCFG "$MUSTER" "$@" 2>"$_T/err" </dev/null)
+# Its own state: under this config every baseline the main one placed is
+# under no declared root, i.e. unlayered (P14), which is not this test.
+rpl() { OUT=$(MUSTER_STATE_DIR=$_T/rstate MUSTER_CONFIG=$RCFG "$MUSTER" "$@" \
+  2>"$_T/err" </dev/null)
   RC=$?; ERR=$(cat "$_T/err"); }
 rpl placed --porcelain
 expv "$RD/r.conf" migrate-dir
@@ -803,12 +806,13 @@ assert "shadowed: never placed by the outer root" \
 OUT=$("$MUSTER" check 2>&1); RC=$?
 expect_rc 3 "check: a shadowed source is a FAULT"
 g "$TK" rm -q -r link/config/apps; g "$TK" commit -m unstray
-# Two roots with the SAME destination: ambiguous, refused.
-printf 'place %s %s/ app-owned\n' "$IA" "$DST/apps/code" > "$_T/dupcfg"
-printf 'place %s %s app-owned\n' "$AS" "$DST/apps/code" >> "$_T/dupcfg"
+# The SAME source root twice: a layer is declared once (P14), refused.
+# (Two roots sharing a DESTINATION are layers: test/layers.t.)
+printf 'place %s/ %s app-owned\n' "$IA" "$DST/apps/code" > "$_T/dupcfg"
+printf 'place %s %s/x app-owned\n' "$IA" "$DST/apps/code" >> "$_T/dupcfg"
 OUT=$(MUSTER_CONFIG=$_T/dupcfg "$MUSTER" placed 2>&1); RC=$?
-expect_rc 2 "two roots sharing a destination (one with a trailing /)"
-assert "and it says which" has "$OUT" "share the destination $DST/apps/code"
+expect_rc 2 "one source root on two place lines (one with a trailing /)"
+assert "and it says which" has "$OUT" "the source root $IA is on two"
 
 # === where, dry-run, path filters, config =====================================
 OUT=$("$MUSTER" where "$DST/app/a.conf" 2>&1); RC=$?

@@ -163,6 +163,11 @@ commands:
          merge-back, capture, or deciding a conflict
   where  <path>
          which source a destination comes from, or the reverse
+  retire [--dry-run] <layer-source|unrecorded>
+         confirm that one layer, no longer declared, is meant to go:
+         its files are removed (a repo-owned live edit displaced first,
+         an edited user-editable file left as a conflict, an app-owned
+         file only forgotten); nothing outside that layer is touched
   displaced [list | clear <run> <path>... | clear --all]
          the live edits kept aside by place; a check fault until cleared
   retro  <command>
@@ -196,6 +201,7 @@ case ${1:-} in
   capture) shift; capture_main "$@" ;;
   diff) shift; diff_main "$@" ;;
   where) shift; where_main "$@" ;;
+  retire) shift; retire_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
   retro) shift; retro_main "$@" ;;
   help|-h|--help) usage ;;

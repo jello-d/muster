@@ -375,7 +375,15 @@ into a git working tree.
   with no merge-back, since shipped code is never edited live.
 - NOT privileged. Root-owned destinations are reported only (P11).
 
-### P14. Layers: one destination root, several sources (AGREED)
+### P14. Layers: one destination root, several sources (AGREED, BUILT)
+
+BUILT 2026-10-05: verdicts `layered`, `unlayered` and `unhomed` (an
+application's file whose capture directory is in no single layer), the
+layer record beside the mirror at `<state>/layer/<path>`, the `check`
+note for unrecorded baselines, `muster retire <layer-source>` and
+`muster retire unrecorded`, and `where` naming the layer. A destination
+root no longer declared at all is covered too: its baselines read
+`unlayered`, where before they were silently abandoned.
 
 PROPOSED 2026-10-05; CONCURRED by the integrator the same day (T16 in its
 requests file) with one amendment and an answer to the open question,
@@ -456,7 +464,9 @@ nothing below changes meaning under a config that already parses.
   are the tracked ones plus new, unignored ones, read from the working
   tree; gitignored files are never source. Outside git, every file.
 - `<dest-root>` is a directory, created as needed.
-- No two `place` lines may share a `<dest-root>` (ambiguous ownership).
+- No two `place` lines may share a `<source-root>`. AMENDED 2026-10-05
+  (P14, additive: no config that parsed before changes meaning): lines
+  sharing a `<dest-root>` are LAYERS, where before they were refused.
   Nesting is allowed: the MOST SPECIFIC root owns its subtree, and a
   source file of an outer root that lands inside an inner root is
   `shadowed` (a fault, never acted on).

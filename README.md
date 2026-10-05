@@ -306,6 +306,12 @@ something does, 2 a step could not run.
                  muster displaced clear <run> <path>
     source-link, foreign, linked-dir, shadowed
                  a shape muster will not act on: fix the source or link
+    layered      two layers supply one file: remove it from one
+    unlayered    its layer is no longer declared: if it is meant to
+                 go, muster retire <layer-source>; nothing is removed
+                 until then
+    unhomed      an app's file whose capture directory is in no single
+                 layer: give the directory one home
 
 WHEN THE BANNER FIRES: `muster report` shows what the timer saw (instant,
 no network); `muster resolve --dry-run` shows what can be done and what
@@ -566,6 +572,19 @@ root pairs and per-file overrides:
     policy <dest-path> <user-editable|repo-owned|app-owned>
     capture <dest-dir>     an application creates files here (P10)
 
+LAYERS (P14): several `place` lines may share one destination root, one
+per layer (the integrator keys them on its flavor categories); a layer's
+identity is its source root, so one source root twice is refused. A file
+belongs to the one layer that supplies it, and moving it between layers
+removes nothing. Two supplying it is `layered`, a fault, nothing placed.
+Removal goes by CAUSE: each baseline records its layer, so a file gone
+from a layer still declared is an `orphan` (removed, as ever), while a
+layer no longer declared leaves its files `unlayered`, a fault that
+removes nothing, until `muster retire <layer-source>` confirms that one
+layer. Baselines placed before layers were recorded carry none: every
+`place` backfills them, `check` notes any left, and one that no layer
+supplies is `unlayered`, never an orphan (`muster retire unrecorded`).
+
 Each file has three versions: the source (the integrator's working tree;
 tracked and new files, never gitignored ones), the live copy, and the
 baseline, a sparse mirror under `<state>/root/<absolute path>` whose
@@ -579,6 +598,8 @@ stored. The commands:
     muster where <path>                      source <-> destination
     muster diff [path...]                    what changed on each side
     muster displaced [list | clear ...]      repo-owned edits kept aside
+    muster retire [--dry-run] <layer-source|unrecorded>
+                                             remove one undeclared layer
 
 Verdicts: `in-sync`, `new`, `missing` (deleted live: comes back),
 `place`, `converged`, `migrate` (a symlink into its own source becomes a
@@ -591,7 +612,8 @@ was, while it shows a symlink, which a copy would drop), `merge-back`,
 `displace`, `orphan`, `app-held`, `conflict`, `shadowed`, `foreign`,
 `linked-dir` (a directory link to anywhere else: never touched),
 `source-link` (the source is a symlink: never placed, a fault naming
-it), `read-only`, `unreadable`, `no-source`.
+it), `read-only`, `unreadable`, `no-source`, and for layers `layered`,
+`unlayered`, `unhomed` (all faults; see above).
 
 No edit is lost under any policy. `place` never overwrites a
 user-editable live edit (that is a merge-back or a conflict); it

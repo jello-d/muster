@@ -228,11 +228,27 @@ placement_findings() {
         "out of the root" ;;
       merge-back) echo "fault merge-back $_g_p: a live edit not yet" \
         "in the source; review it (muster diff), then muster merge-back" ;;
+      layered) echo "fault place      layered $_g_p: supplied by two" \
+        "layers, $(_st_unesc "$(_st_field "$_g_r" source)") and" \
+        "$(_st_unesc "$(_st_field "$_g_r" also)"); nothing is placed until" \
+        "one of them stops supplying it" ;;
+      unlayered) _g_l=$(_st_unesc "$(_st_field "$_g_r" source)")
+        if [ "$_g_l" = unrecorded ]; then _g_l="is unrecorded"
+        else _g_l="$_g_l is no longer declared"; fi
+        echo "fault place      unlayered $_g_p: its layer $_g_l and no" \
+          "layer supplies it, so nothing is removed; if that layer is" \
+          "meant to go, muster retire it" ;;
+      unhomed) echo "fault capture    unhomed $_g_p: an application's" \
+        "file in a capture directory that is in no single layer's source," \
+        "so there is no one place to capture it to" ;;
       *) echo "fault place      $_g_v $_g_p" ;;
     esac
   done <<RECORDS
 $_g_recs
 RECORDS
+  _g_un=$(placement_unrecorded | grep -c .) || :
+  [ "${_g_un:-0}" = 0 ] || echo "note place      $_g_un placed file(s)" \
+    "with no layer recorded; one muster place records them (P14)"
   placement_displaced | while read -r _g_run _g_path; do
     [ -n "$_g_path" ] || continue
     echo "fault displaced  $_g_path (run $_g_run): a repo-owned live" \

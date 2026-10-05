@@ -463,19 +463,15 @@ _sv_cfg_lines() {
   done < "$SV_CONFIG"
 }
 
-# _sv_cfg_place_dups: two `place` roots with the SAME destination: which
-# owns a file there is ambiguous, so the config is refused (nesting is
-# fine: the most specific root owns its subtree).
+# _sv_cfg_place_dups: one SOURCE root on two `place` lines. A source root
+# is a layer's identity (P14), so a second line is a duplicate. Several
+# lines MAY share a destination: those are the layers into it.
 _sv_cfg_place_dups() {
   _k_dup=$(while read -r _k_kw _k_a _k_b || [ -n "$_k_kw" ]; do
-    if [ "$_k_kw" = place ]; then
-      # shellcheck disable=SC2086  # two words
-      set -- $_k_b
-      _sv_tilde "$1"; echo
-    fi
+    if [ "$_k_kw" = place ]; then _sv_tilde "$_k_a"; echo; fi
   done < "$SV_CONFIG" | sed 's|/*$||' | sort | uniq -d | head -n 1)
-  [ -z "$_k_dup" ] || { echo "muster: two place roots share the" \
-    "destination $_k_dup; give each its own (nesting is allowed)" >&2
+  [ -z "$_k_dup" ] || { echo "muster: the source root $_k_dup is on two" \
+    "place lines; a layer is declared once" >&2
     return 1; }
 }
 

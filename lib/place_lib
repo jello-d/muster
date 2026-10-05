@@ -188,7 +188,7 @@ _pl_baselines() {
 # (the verdict), PL_POL (effective policy), PL_S, PL_D, PL_M (source,
 # destination and mirror paths). The whole of P3, P8 and P10, in one place.
 _pl_verdict() {
-  PL_S=$1/$4 PL_D=$2/$4 PL_DR=$2 PL_SR=$1 PL_RP=$3
+  PL_S=$1/$4 PL_D=$2/$4 PL_DR=$2 PL_SR=$1 PL_RP=$3 PL_GONE=''
   PL_M=$(_pl_state)/root$PL_D
   PL_POL=$(_pl_policy "$PL_D" "$3")
   # Decided BEFORE any early return, so every verdict reports the policy
@@ -369,40 +369,23 @@ _pl_root_ok() {
 }
 
 _pl_record() {   # one porcelain line from the PL_ globals
-  printf 'path=%s verdict=%s policy=%s source=%s\n' "$(_sv_esc "$PL_D")" \
-    "$PL_V" "$PL_POL" "$(_sv_esc "$PL_S")"
+  printf 'path=%s verdict=%s policy=%s source=%s also=%s\n' \
+    "$(_sv_esc "$PL_D")" "$PL_V" "$PL_POL" "$(_sv_esc "$PL_S")" \
+    "$(_sv_esc "${PL_ALSO:--}")"
+}
+
+# _pl_rec_cb: placement_records' callback. A drift verdict on a path the
+# user cannot write becomes `read-only`: reported, never written (P11).
+_pl_rec_cb() {
+  if _pl_drift_verdict "$PL_V" && ! _pl_writable "$PL_D"; then
+    PL_V=read-only
+  fi
+  _pl_record
 }
 
 # placement_records: every destination under every declared root, one
-# record each. A drift verdict on a path the user cannot write becomes
-# `read-only`: reported, never written (P11).
-placement_records() {
-  _pl_roots | while read -r _e_src _e_dst _e_pol; do
-    if ! _pl_root_ok "$_e_src"; then
-      PL_D=$_e_dst PL_S=$_e_src PL_POL=$_e_pol PL_V=no-source
-      _pl_record
-      continue
-    fi
-    _e_in=$(_pl_inner "$_e_dst")
-    { _pl_sources "$_e_src"; _pl_baselines "$_e_dst"
-      _pl_captured_live "$_e_dst"; } | sort -u \
-      | while IFS= read -r _e_rel; do
-          [ -n "$_e_rel" ] || continue
-          if _pl_owned_elsewhere "$_e_dst/$_e_rel" "$_e_in"; then
-            [ -f "$_e_src/$_e_rel" ] || continue   # the inner root's file
-            PL_D=$_e_dst/$_e_rel PL_S=$_e_src/$_e_rel PL_POL=$_e_pol
-            PL_V=shadowed
-            _pl_record
-            continue
-          fi
-          _pl_verdict "$_e_src" "$_e_dst" "$_e_pol" "$_e_rel"
-          if _pl_drift_verdict "$PL_V" && ! _pl_writable "$PL_D"; then
-            PL_V=read-only
-          fi
-          _pl_record
-        done
-  done
-}
+# record each.
+placement_records() { PL_RETIRE=''; _pl_dest_walk _pl_rec_cb records; }
 
 # _pl_render <porcelain|table|flagged>: exit 1 unless every file is in
 # sync (app-held and unmanaged are in sync by definition: not ours).
@@ -482,50 +465,249 @@ _pl_act_one() {
   case $PL_V in
     new|missing|place|migrate)
       [ ! -h "$PL_D" ] || rm -f -- "$PL_D" || return 1
-      _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M" ;;
+      _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M" \
+        && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP" ;;
     converged)
-      _pl_put "$PL_S" "$PL_M" ;;
+      _pl_put "$PL_S" "$PL_M" && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP" ;;
     displace)
       if [ -e "$PL_D" ]; then _pl_displace "$PL_D" || return 1; fi
-      if [ -f "$PL_S" ]; then
-        _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M"
+      # PL_GONE: a retired layer's source may still be on disk, and is
+      # gone all the same (found by the tests: it was placed back).
+      if [ -f "$PL_S" ] && [ -z "${PL_GONE:-}" ]; then
+        _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M" \
+          && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"
       else
-        _pl_drop "$PL_D" "$PL_DR" && _pl_drop "$PL_M" "$_a_root"
+        _pl_drop "$PL_D" "$PL_DR" && _pl_drop "$PL_M" "$_a_root" \
+          && _pl_layer_drop "$PL_D"
       fi ;;
     orphan)
       # app-owned: the live file is the application's; forget it only.
       if [ "$PL_POL" != app-owned ] && [ -e "$PL_D" ]; then
         _pl_drop "$PL_D" "$PL_DR" || return 1
       fi
-      _pl_drop "$PL_M" "$_a_root" ;;
+      _pl_drop "$PL_M" "$_a_root" && _pl_layer_drop "$PL_D" ;;
     *) return 1 ;;
   esac
 }
 
 # _pl_walk <fn> [path...]: the verdict of every managed file, computed AT
 # THE MOMENT the callback acts on it, so nothing acts on a stale view. With
-# paths, only files at or under one of them. A root that fails the guard
-# is reported and skipped whole.
-_pl_walk() {
-  _w_fn=$1; shift
-  _pl_roots | while read -r _w_src _w_dst _w_pol; do
-    if ! _pl_root_ok "$_w_src"; then
-      printf 'no-source  %s: missing, unreadable or empty; nothing under' \
-        "$_w_src"
-      printf ' %s is placed or removed\n' "$_w_dst"
-      continue
+# paths, only files at or under one of them.
+_pl_walk() { _w_fn=$1; shift; _pl_dest_walk "$_w_fn" act "$@"; }
+
+# === layers (P14): one destination root, several sources ===================
+# A layer is a `place` line; its identity is its SOURCE ROOT. The walk goes
+# one DESTINATION at a time, with every layer into it, so each file is
+# judged once, against the one layer that supplies it.
+
+_pl_dests() { _pl_roots | awk '!seen[$2]++ { print $2 }'; }
+
+_pl_layers_of() {   # <dest-root>: "<source-root> <policy>" per layer
+  _pl_roots | awk -v d="$1" '$2 == d { print $1, $3 }'
+}
+
+# THE LAYER RECORD: which layer placed a file, "<source-root> <policy>", in
+# a tree beside the baseline mirror. Asked exactly when that layer is GONE,
+# so it is persisted, never recomputed; written and removed with the
+# baseline, and backfilled by every place.
+_pl_layer_file() { printf '%s/layer%s' "$(_pl_state)" "$1"; }
+_pl_layer_get() { cat "$(_pl_layer_file "$1")" 2>/dev/null || :; }
+_pl_layer_set() {   # <dest> <source-root> <policy>
+  [ "$(_pl_layer_get "$1")" != "$2 $3" ] || return 0
+  _ls_f=$(_pl_layer_file "$1")
+  mkdir -p -- "$(dirname -- "$_ls_f")" \
+    && printf '%s %s\n' "$2" "$3" > "$_ls_f.$$" \
+    && mv -f -- "$_ls_f.$$" "$_ls_f"
+}
+_pl_layer_drop() {   # <dest>
+  _ld_f=$(_pl_layer_file "$1")
+  [ ! -e "$_ld_f" ] || _pl_drop "$_ld_f" "$(_pl_state)/layer"
+}
+
+# _pl_dest_walk <fn> <records|act> [path...]: every file of every
+# destination root, resolved (_pl_resolve) and handed to <fn>. A layer that
+# fails the mass-deletion guard (P8) stops its WHOLE destination: with one
+# layer missing, its files would read as unsupplied.
+_pl_dest_walk() {
+  _d_fn=$1 _d_mode=$2; shift 2
+  _pl_dests | while IFS= read -r _d_dst; do
+    _d_lay=$(_pl_layers_of "$_d_dst")
+    _d_bad=$(printf '%s\n' "$_d_lay" | while read -r _d_s _d_p; do
+      _pl_root_ok "$_d_s" || printf '%s\n' "$_d_s"; done)
+    if [ -n "$_d_bad" ]; then
+      _pl_no_source "$_d_mode" "$_d_dst" "$_d_bad"; continue
     fi
-    _w_in=$(_pl_inner "$_w_dst")
-    { _pl_sources "$_w_src"; _pl_baselines "$_w_dst"
-      _pl_captured_live "$_w_dst"; } | sort -u \
-      | while IFS= read -r _w_rel; do
-          [ -n "$_w_rel" ] || continue
-          # Owned by a more specific root: never this root's to act on.
-          ! _pl_owned_elsewhere "$_w_dst/$_w_rel" "$_w_in" || continue
-          _pl_selected "$_w_dst/$_w_rel" "$@" || continue
-          _pl_verdict "$_w_src" "$_w_dst" "$_w_pol" "$_w_rel"
-          "$_w_fn"
+    _d_in=$(_pl_inner "$_d_dst")
+    { printf '%s\n' "$_d_lay" | while read -r _d_s _d_p; do
+        _pl_sources "$_d_s"; done
+      _pl_baselines "$_d_dst"; _pl_captured_live "$_d_dst"; } | sort -u \
+      | while IFS= read -r _d_rel; do
+          [ -n "$_d_rel" ] || continue
+          if _pl_owned_elsewhere "$_d_dst/$_d_rel" "$_d_in"; then
+            [ "$_d_mode" = records ] || continue
+            _pl_shadowed "$_d_dst" "$_d_rel" "$_d_lay"; continue
+          fi
+          _pl_selected "$_d_dst/$_d_rel" "$@" || continue
+          _pl_resolve "$_d_dst" "$_d_rel" "$_d_lay"
+          "$_d_fn"
         done
+  done
+  _pl_strays "$_d_fn" "$_d_mode" "$@"
+}
+
+# _pl_no_source <mode> <dest-root> <failing source roots>: P8's guard.
+_pl_no_source() {
+  printf '%s\n' "$3" | while IFS= read -r _n_s; do
+    if [ "$1" = records ]; then
+      PL_D=$2 PL_S=$_n_s PL_POL=- PL_V=no-source PL_ALSO=-; _pl_record
+    else
+      printf 'no-source  %s: missing, unreadable or empty; nothing under' \
+        "$_n_s"
+      printf ' %s is placed or removed\n' "$2"
+    fi
+  done
+}
+
+# _pl_shadowed <dest-root> <rel> <layers>: a source file whose destination
+# a more specific root owns (P9).
+_pl_shadowed() {
+  printf '%s\n' "$3" | while read -r _h_s _h_p; do
+    [ -f "$_h_s/$2" ] || continue
+    PL_D=$1/$2 PL_S=$_h_s/$2 PL_POL=$_h_p PL_V=shadowed PL_ALSO=-
+    _pl_record
+  done
+}
+
+# _pl_suppliers <rel> <layers>: "<source-root> <policy>" of each layer
+# whose source has the file (a symlink counts: it gets its own verdict).
+_pl_suppliers() {
+  printf '%s\n' "$2" | while read -r _u_s _u_p; do
+    if [ -h "$_u_s/$1" ] || [ -f "$_u_s/$1" ]; then
+      printf '%s %s\n' "$_u_s" "$_u_p"
+    fi
+  done
+}
+
+# _pl_resolve <dest-root> <rel> <layers>: the PL_ globals and verdict for
+# one file. One supplier: judged as ever. Two: `layered`. None: by the
+# CAUSE (P14), from the layer record: still declared, the normal P8 path
+# (an orphan); not declared, `unlayered`, removing nothing, unless that
+# layer is the one being retired.
+_pl_resolve() {
+  PL_ALSO=- PL_HIT='' PL_GONE=''
+  _r_sup=$(_pl_suppliers "$2" "$3")
+  case $(printf '%s' "$_r_sup" | grep -c .) in
+    1) # shellcheck disable=SC2086  # "<source-root> <policy>", no spaces
+       set -- "$1" "$2" $_r_sup
+       _pl_verdict "$3" "$1" "$4" "$2"; return 0 ;;
+    0) ;;
+    *) _pl_layered "$1" "$2" "$_r_sup"; return 0 ;;
+  esac
+  if [ ! -f "$(_pl_state)/root$1/$2" ]; then
+    _pl_capture_home "$1" "$2" "$3"; return 0
+  fi
+  _pl_unsupplied "$1" "$2" "$3" "$(_pl_layer_get "$1/$2")"
+}
+
+_pl_layered() {   # <dest-root> <rel> <suppliers>
+  PL_D=$1/$2 PL_DR=$1 PL_M=$(_pl_state)/root$1/$2
+  PL_S=$(printf '%s\n' "$3" | awk 'NR == 1 { print $1 }')/$2
+  PL_ALSO=$(printf '%s\n' "$3" | awk 'NR == 2 { print $1 }')/$2
+  PL_POL=$(_pl_policy "$PL_D" -) PL_V=layered
+}
+
+# _pl_unsupplied <dest-root> <rel> <layers> <record>: placed, and no layer
+# supplies it now.
+_pl_unsupplied() {
+  _o_src=${4% *} _o_pol=${4##* }
+  [ -n "$4" ] || _o_src=unrecorded _o_pol=user-editable
+  if [ -n "$4" ] \
+    && printf '%s\n' "$3" | awk -v s="$_o_src" '$1 == s { f = 1 }
+      END { exit !f }'; then
+    _pl_verdict "$_o_src" "$1" "$_o_pol" "$2"; return 0   # P8: an orphan
+  fi
+  if [ "${PL_RETIRE:-}" = "$_o_src" ]; then
+    _pl_retired "$1" "$2" "$_o_src" "$_o_pol"; PL_HIT=1; return 0
+  fi
+  PL_D=$1/$2 PL_DR=$1 PL_M=$(_pl_state)/root$1/$2 PL_S=$_o_src
+  PL_POL=$(_pl_policy "$PL_D" "$_o_pol") PL_V=unlayered
+}
+
+# _pl_retired <dest-root> <rel> <layer-source> <policy>: a file of a layer
+# being retired, judged as GONE from the source whatever that directory
+# holds now (an undeclared layer's source often still exists: it is just
+# not this box's). P4 and P8 as for any orphan: displace, conflict or
+# orphan, and an app-owned file is only forgotten.
+_pl_retired() {
+  PL_S=$3/$2 PL_D=$1/$2 PL_DR=$1 PL_SR=$3 PL_RP=$4 PL_GONE=1
+  PL_M=$(_pl_state)/root$PL_D
+  PL_POL=$(_pl_policy "$PL_D" "$4")
+  ! _pl_capture_file "$PL_D" || PL_POL=app-owned
+  if [ -h "$PL_D" ]; then PL_V=foreign; return 0; fi
+  _t_l=''
+  if [ -e "$PL_D" ]; then
+    [ -f "$PL_D" ] && [ -r "$PL_D" ] || { PL_V=unreadable; return 0; }
+    _t_l=1
+  fi
+  _pl_gone 1 "$_t_l"
+}
+
+# _pl_strays <fn> <records|act> [path...]: baselines under NO declared
+# destination root, the layer having been the only one into its root.
+# Unlayered like any other (P14); only a retire of their layer acts, and
+# then with no empty-parent cleanup, since their root is unknown.
+_pl_strays() {
+  _y_fn=$1 _y_mode=$2; shift 2
+  _y_dsts=$(_pl_dests)
+  placement_baseline_paths | while IFS= read -r _y_d; do
+    printf '%s\n' "$_y_dsts" | (while IFS= read -r _y_r; do
+        case $_y_d in "$_y_r"/*) exit 0 ;; esac
+      done; exit 1) && continue
+    _pl_selected "$_y_d" "$@" || continue
+    PL_ALSO=- PL_HIT='' PL_GONE=''
+    _pl_unsupplied "$(dirname -- "$_y_d")" "${_y_d##*/}" '' \
+      "$(_pl_layer_get "$_y_d")"
+    "$_y_fn"
+  done
+}
+
+# placement_baseline_paths: every baseline, as its destination path.
+placement_baseline_paths() {
+  _u_m=$(_pl_state)/root
+  [ -d "$_u_m" ] || return 0
+  (cd "$_u_m" && find . -type f ! -name "*$PL_TMP.*") | sed 's|^\.||'
+}
+
+# _pl_capture_home <dest-root> <rel> <layers>: an application's new file
+# (no source, no baseline) goes to the ONE layer whose source holds its
+# capture directory (P14). With one layer, there as it always did. In
+# none or several: `unhomed`, a fault, nothing captured.
+_pl_capture_home() {
+  if [ "$(printf '%s\n' "$3" | grep -c .)" = 1 ]; then
+    # shellcheck disable=SC2086  # "<source-root> <policy>", no spaces
+    set -- "$1" "$2" $3
+    _pl_verdict "$3" "$1" "$4" "$2"; return 0
+  fi
+  _c_cap=$(_pl_captures | while IFS= read -r _c_d; do
+    case $1/$2 in "$_c_d"/*) printf '%s\n' "${_c_d#"$1"/}" ;; esac
+  done | awk '{ print length, $0 }' | sort -rn | head -n 1 | cut -d' ' -f2-)
+  _c_home=$(printf '%s\n' "$3" | while read -r _c_s _c_p; do
+    [ -z "$_c_cap" ] || [ ! -d "$_c_s/$_c_cap" ] \
+      || printf '%s %s\n' "$_c_s" "$_c_p"; done)
+  if [ "$(printf '%s' "$_c_home" | grep -c .)" = 1 ]; then
+    # shellcheck disable=SC2086  # "<source-root> <policy>", no spaces
+    set -- "$1" "$2" $_c_home
+    _pl_verdict "$3" "$1" "$4" "$2"; return 0
+  fi
+  PL_D=$1/$2 PL_DR=$1 PL_M=$(_pl_state)/root$1/$2 PL_S=$1/$_c_cap
+  PL_POL=app-owned PL_V=unhomed
+}
+
+# placement_unrecorded: every baseline with no layer recorded, by its
+# destination path (P14's ordering rule: `check` notes them).
+placement_unrecorded() {
+  placement_baseline_paths | while IFS= read -r _u_d; do
+    [ -e "$(_pl_layer_file "$_u_d")" ] || printf '%s\n' "$_u_d"
   done
 }
 
@@ -540,6 +722,15 @@ _pl_selected() {   # <dest> [path...]: no paths selects everything
 }
 
 _pl_place_cb() {
+  # BACKFILL: every file a layer supplies, and that has a baseline, gets
+  # its layer recorded (P14's ordering rule: before a box's layers ever
+  # change, one place records them all).
+  case $PL_V in
+    layered|unlayered|unhomed|source-link|migrate-dir|linked-dir) ;;
+    *) if [ -z "$PL_DRY" ] && [ -f "$PL_M" ] && [ -f "$PL_S" ]; then
+         _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP" || :
+       fi ;;
+  esac
   if [ "$PL_V" = source-link ]; then
     printf 'refused    %s: its source %s is a symlink, never placed\n' \
       "$PL_D" "$PL_S"; return 0
@@ -578,7 +769,8 @@ _pl_merge_cb() {
   fi
   if [ -n "$PL_DRY" ]; then printf 'would merge-back %s -> %s\n' \
     "$PL_D" "$PL_S"; return 0; fi
-  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
+  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M" \
+    && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"; then
     printf 'merged     %s -> %s\n' "$PL_D" "$PL_S"
     retro_event merged-back "$PL_D"
   else printf 'FAILED     merge-back %s\n' "$PL_D"; echo x >> "$PL_FAILS"
@@ -684,7 +876,8 @@ _pl_capture_cb() {
   fi
   if [ -n "$PL_DRY" ]; then printf 'would capture %s -> %s\n' \
     "$PL_D" "$PL_S"; return 0; fi
-  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M"; then
+  if _pl_put "$PL_D" "$PL_S" && _pl_put "$PL_D" "$PL_M" \
+    && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"; then
     printf 'captured   %s -> %s\n' "$PL_D" "$PL_S"
     retro_event captured "$PL_D"
   else printf 'FAILED     capture %s\n' "$PL_D"; echo x >> "$PL_FAILS"
@@ -818,7 +1011,9 @@ RECORDS
   return 1
 }
 
-# where_main <path>: resolve a path in either direction (P9).
+# where_main <path>: resolve a path in either direction (P9). A
+# destination whose root several layers share also names its LAYER (P14):
+# the one supplying it, else the one that placed it.
 where_main() {
   [ "$#" = 1 ] || { echo "usage: muster where <path>" >&2; return 2; }
   survey_config || return 2
@@ -827,9 +1022,7 @@ where_main() {
   _h_out=$(_pl_roots | awk '{ print length($2), $0 }' | sort -rn \
     | cut -d' ' -f2- | while read -r _h_src _h_dst _h_pol; do
     case $_h_p in
-      "$_h_dst"/*) printf '%s <- %s (%s)\n' "$_h_p" \
-        "$_h_src/${_h_p#"$_h_dst"/}" \
-        "$(_pl_policy "$_h_p" "$_h_pol")" ;;
+      "$_h_dst"/*) _where_dest "$_h_p" "$_h_dst" ;;
       "$_h_src"/*) printf '%s -> %s (%s)\n' "$_h_p" \
         "$_h_dst/${_h_p#"$_h_src"/}" \
         "$(_pl_policy "$_h_dst/${_h_p#"$_h_src"/}" "$_h_pol")" ;;
@@ -838,6 +1031,96 @@ where_main() {
   [ -n "$_h_out" ] || { echo "muster: $_h_p is not under a declared root" >&2
     return 1; }
   printf '%s\n' "$_h_out"
+}
+
+# _where_dest <dest> <dest-root>: the answer for a destination path.
+_where_dest() {
+  _w_rel=${1#"$2"/} _w_lay=$(_pl_layers_of "$2")
+  if [ "$(printf '%s\n' "$_w_lay" | grep -c .)" = 1 ]; then
+    # shellcheck disable=SC2086  # "<source-root> <policy>", no spaces
+    set -- "$1" "$2" $_w_lay
+    printf '%s <- %s (%s)\n' "$1" "$3/$_w_rel" "$(_pl_policy "$1" "$4")"
+    return 0
+  fi
+  _w_sup=$(_pl_suppliers "$_w_rel" "$_w_lay")
+  case $(printf '%s' "$_w_sup" | grep -c .) in
+    0) _w_rec=$(_pl_layer_get "$1")
+       if [ -n "$_w_rec" ]; then
+         printf '%s <- %s (%s, layer %s, which no longer supplies it)\n' \
+           "$1" "${_w_rec% *}/$_w_rel" "$(_pl_policy "$1" "${_w_rec##* }")" \
+           "${_w_rec% *}"
+       else
+         printf '%s <- no layer supplies it (layers: %s)\n' "$1" \
+           "$(printf '%s\n' "$_w_lay" | awk '{ print $1 }' | paste -sd' ')"
+       fi ;;
+    1) # shellcheck disable=SC2086  # "<source-root> <policy>", no spaces
+       set -- "$1" "$2" $_w_sup
+       printf '%s <- %s (%s, layer %s)\n' "$1" "$3/$_w_rel" \
+         "$(_pl_policy "$1" "$4")" "$3" ;;
+    *) printf '%s <- LAYERED: supplied by %s\n' "$1" \
+         "$(printf '%s\n' "$_w_sup" | awk '{ print $1 }' | paste -sd' ')" ;;
+  esac
+}
+
+# retire_main [--dry-run] <layer-source|unrecorded>: confirm that ONE
+# layer, no longer declared, is meant to go (P14). Its files are removed
+# under the usual guarantees: a repo-owned live edit is displaced first,
+# an edited user-editable file is left as a conflict, an app-owned file is
+# only forgotten. `unrecorded` names the baselines placed before layers
+# were recorded. Nothing outside that layer is touched.
+retire_main() {
+  PL_DRY=
+  case ${1:-} in --dry-run) PL_DRY=1; shift ;; esac
+  case $#:${1:-} in
+    1:-*|1:) ;;
+    1:*) _t_ok=1 ;;
+  esac
+  [ -n "${_t_ok:-}" ] || { echo "usage: muster retire [--dry-run]" \
+    "<layer-source|unrecorded>" >&2; return 2; }
+  _t_ok=
+  survey_config || return 2
+  PL_RETIRE=$1
+  [ "$1" = unrecorded ] \
+    || PL_RETIRE=$(_sv_tilde "$1" | sed 's|/*$||')
+  if _pl_roots | awk -v s="$PL_RETIRE" '$1 == s { f = 1 } END { exit !f }'
+  then
+    echo "muster: $PL_RETIRE is still a declared layer; remove its place" \
+      "line first (a file it stops supplying is an orphan, not retired)" >&2
+    return 2
+  fi
+  PL_RUN=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  PL_FAILS=$(_pl_state)/.place-fails.$$ PL_HITS=$PL_FAILS.hits
+  mkdir -p "$(_pl_state)" && : > "$PL_FAILS" && : > "$PL_HITS" || return 2
+  _pl_dest_walk _pl_retire_cb act
+  _t_n=$(wc -l < "$PL_HITS" | tr -d ' ')
+  _t_failed=$(wc -l < "$PL_FAILS" | tr -d ' ')
+  rm -f -- "$PL_FAILS" "$PL_HITS"
+  [ "$_t_n" != 0 ] || { echo "muster: no placed file records the layer" \
+    "$PL_RETIRE; nothing to retire" >&2; PL_RETIRE=''; return 1; }
+  PL_RETIRE=
+  [ "$_t_failed" = 0 ] || return 2
+}
+
+# _pl_retire_cb: one file of the layer being retired, acted on or named.
+_pl_retire_cb() {
+  [ -n "$PL_HIT" ] || return 0
+  echo x >> "$PL_HITS"
+  case $PL_V in
+    orphan|displace) ;;
+    conflict) printf 'left       %s: edited since it was placed, so it' \
+        "$PL_D"; printf ' stays (a conflict until you decide)\n'; return 0 ;;
+    *) printf 'left       %s: %s, never removed\n' "$PL_D" "$PL_V"
+       return 0 ;;
+  esac
+  if ! _pl_writable "$PL_D"; then
+    printf 'read-only  %s: not writable by this user; reported only\n' \
+      "$PL_D"; return 0
+  fi
+  if [ -n "$PL_DRY" ]; then printf 'would retire %s\n' "$PL_D"
+  elif _pl_act_one; then printf 'retired    %s\n' "$PL_D"
+    retro_tally "retired" "$PL_D"
+  else printf 'FAILED     retire %s\n' "$PL_D"; echo x >> "$PL_FAILS"
+  fi
 }
 
 # placement_displaced: "<run> <absolute path>" for every kept edit (P4).
