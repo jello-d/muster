@@ -375,50 +375,69 @@ into a git working tree.
   with no merge-back, since shipped code is never edited live.
 - NOT privileged. Root-owned destinations are reported only (P11).
 
-### P14. Layers: one destination root, several sources (PROPOSED)
+### P14. Layers: one destination root, several sources (AGREED)
 
-PROPOSED 2026-10-05, agreed in direction with the user; the format change
-awaits the integrator's concurrence (T16 in its requests file), as this
-document's own rule requires.
+PROPOSED 2026-10-05; CONCURRED by the integrator the same day (T16 in its
+requests file) with one amendment and an answer to the open question,
+both adopted below; agreed with the user.
 
 WHY: a root is FLAVOR-BLIND. The integrator declares one root over all
 of its config, and every box that runs muster gets every file in it.
-Measured: a server with no compositor had 161 files placed, ~80 of them
-desktop-only (a status bar's 50, a compositor's, a launcher's). Its
-modules respect flavor (a desktop-only module never ran there); its
-placement could not. The integrator's answer is a common layer plus a
-layer per flavor, declared only on boxes of that flavor, all into the
-same destination; other flavors and other integrators will want the
-same.
+Measured: a server with no compositor had 161 files placed, 78 of the
+102 under that root desktop-only. Its modules respect flavor; its
+placement could not.
+
+THE INTEGRATOR KEYS LAYERS ON ITS CATEGORIES (its amendment): one source
+directory per category, one `place` line per category the box takes,
+derived from the same manifest that decides which modules a flavor gets.
+A second classification of the same fact would drift from the first, so
+there is none. To muster a layer is simply a `place` line, and its
+identity is its SOURCE ROOT PATH.
 
 MUST BE TRUE:
 
-- Several `place` lines may share a destination root. The same SOURCE
-  twice is still refused, as a duplicate. Each line keeps its own
-  default policy; a `policy` line still applies by destination path.
-- A file is OWNED by the one layer whose source supplies it. Supplied
-  by two layers at once is a FAULT (`layered`) naming both, and nothing
-  is placed for it: no precedence, because no use needs one yet and an
-  overlap is far more likely a mistake. (Precedence, the per-host
-  overlay case, can be added when a host needs it.)
+- Several `place` lines may share a destination root. The same source
+  root twice is refused, as a duplicate. Each line keeps its own default
+  policy; a `policy` line still applies by destination path.
+- A file is OWNED by the one layer whose source supplies it. Supplied by
+  two at once is a FAULT (`layered`) naming both, and nothing is placed
+  for it: no precedence until a use needs one. (The integrator's known
+  future case, per-role and per-host overrides, wants MOST-SPECIFIC-WINS
+  stated as explicit specificity, never declaration order, which a
+  generator would hide.)
 - Merge-back and capture write to the layer that supplies the file. A
   capture directory must exist in exactly one layer's source, or it is
-  a fault: a new file must have one obvious home.
-- A file moved from one layer to another is a move, not a deletion: the
-  new layer supplies it, so nothing is removed.
-- Ownership by the most specific root (P9) still comes first: layers
-  are the roots of EQUAL length.
+  a fault.
+- A file moved from one layer to another is a MOVE: the new layer
+  supplies it and nothing is removed.
+- Ownership by the most specific root (P9) still comes first: layers are
+  the roots of EQUAL destination.
 - `where <path>` names the layer.
 
-AN OPEN QUESTION, for the integrator: a box that STOPS declaring a layer
-(the server, the day the desktop layer is split out) sees every file that
-layer placed become an orphan, and P8 removes orphans: the first place
-after the split would remove ~80 files on that server. That is the
-intent, and still a mass deletion. P8's guard covers a source that is
-missing or empty, not a layer that was removed on purpose. Proposed: a
-place that would remove more than a threshold of files (say 20) in one
-run does nothing for them and faults, until it is confirmed with
-`muster place --confirm-removals`.
+REMOVAL IS DECIDED BY CAUSE, NOT BY COUNT (the integrator's answer, which
+replaced a proposed count threshold: a real 22-file retirement would have
+tripped it, and a 3-file accident would have passed under it):
+
+- THE BASELINE RECORDS THE LAYER that supplied each file, since the
+  question is asked exactly when that layer is gone.
+- Source file gone, its layer STILL DECLARED: the integrator deleted it.
+  `orphan`, removed as P8 says.
+- Its layer NO LONGER DECLARED, and no other layer supplies the file: the
+  BOX changed flavor, which is not a decision about files. `unlayered`, a
+  FAULT, removing NOTHING, naming the layer.
+- `muster retire <layer-source>` confirms ONE layer, once: its files are
+  removed under the usual guarantees (P4: a repo-owned live edit is
+  displaced first, an edited user-editable file is left as a conflict,
+  an app-owned file is only forgotten). Nothing outside that layer is
+  touched, so no unrelated orphan rides along.
+
+ORDERING, the one trap: baselines placed before this existed carry no
+layer. So every `place` records (and backfills) the layer of each file a
+layer supplies, and `check` notes any baseline still without one. A
+baseline with no recorded layer that no layer supplies is `unlayered`
+(layer unrecorded), never an orphan: unknown cause, so nothing removed.
+The integrator changes its layers only after one `place` has run under
+the old config on each box, which the note lets it verify.
 
 ## The config format: FROZEN for the first increment (2026-10-01)
 
