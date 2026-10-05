@@ -260,9 +260,8 @@ restate an application's defaults (one package found three of its four
 directives were restated defaults). muster places exactly what it is
 given and does not judge what is worth tracking.
 
-LAYERS (several sources for one destination, e.g. a per-host overlay)
-are to be designed into the resolver, with merge-back going to whichever
-layer supplied the file, but not built until a layer is in use.
+LAYERS (several sources for one destination) were left unbuilt until a
+layer was in use. One now is: see P14, PROPOSED 2026-10-05.
 
 ### P10. Three policies: a per-root default, with a per-file override
 
@@ -375,6 +374,51 @@ into a git working tree.
 - NOT for package code. Payloads are placed by the integrator's install,
   with no merge-back, since shipped code is never edited live.
 - NOT privileged. Root-owned destinations are reported only (P11).
+
+### P14. Layers: one destination root, several sources (PROPOSED)
+
+PROPOSED 2026-10-05, agreed in direction with the user; the format change
+awaits the integrator's concurrence (T16 in its requests file), as this
+document's own rule requires.
+
+WHY: a root is FLAVOR-BLIND. The integrator declares one root over all
+of its config, and every box that runs muster gets every file in it.
+Measured: a server with no compositor had 161 files placed, ~80 of them
+desktop-only (a status bar's 50, a compositor's, a launcher's). Its
+modules respect flavor (a desktop-only module never ran there); its
+placement could not. The integrator's answer is a common layer plus a
+layer per flavor, declared only on boxes of that flavor, all into the
+same destination; other flavors and other integrators will want the
+same.
+
+MUST BE TRUE:
+
+- Several `place` lines may share a destination root. The same SOURCE
+  twice is still refused, as a duplicate. Each line keeps its own
+  default policy; a `policy` line still applies by destination path.
+- A file is OWNED by the one layer whose source supplies it. Supplied
+  by two layers at once is a FAULT (`layered`) naming both, and nothing
+  is placed for it: no precedence, because no use needs one yet and an
+  overlap is far more likely a mistake. (Precedence, the per-host
+  overlay case, can be added when a host needs it.)
+- Merge-back and capture write to the layer that supplies the file. A
+  capture directory must exist in exactly one layer's source, or it is
+  a fault: a new file must have one obvious home.
+- A file moved from one layer to another is a move, not a deletion: the
+  new layer supplies it, so nothing is removed.
+- Ownership by the most specific root (P9) still comes first: layers
+  are the roots of EQUAL length.
+- `where <path>` names the layer.
+
+AN OPEN QUESTION, for the integrator: a box that STOPS declaring a layer
+(the server, the day the desktop layer is split out) sees every file that
+layer placed become an orphan, and P8 removes orphans: the first place
+after the split would remove ~80 files on that server. That is the
+intent, and still a mass deletion. P8's guard covers a source that is
+missing or empty, not a layer that was removed on purpose. Proposed: a
+place that would remove more than a threshold of files (say 20) in one
+run does nothing for them and faults, until it is confirmed with
+`muster place --confirm-removals`.
 
 ## The config format: FROZEN for the first increment (2026-10-01)
 
