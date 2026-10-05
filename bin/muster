@@ -100,10 +100,11 @@ commands:
          AND behind is refused (resolve first)
   sync   [--dry-run] [--porcelain] [name...]
          the UNATTENDED setting of the knob owed and catch-up are on:
-         fast-forward only, and only a QUIESCENT repo (no git operation
-         open, no process of yours inside, no tracked file saved since
-         HEAD last moved). Never rebases. What it declines stays owed,
-         and says why: busy, in-use, touched, unseen, diverged
+         fast-forward only, and only a QUIESCENT repo: no git operation
+         open, no process of yours inside (a shell parked at a prompt
+         does not count), no tracked file saved since HEAD last moved.
+         Never rebases. What it declines stays owed, and says why:
+         busy, in-use, touched, unseen, diverged
   resolve [--dry-run] [--push] [name...]
          everything SAFE, in order: catch-up (the canonical first), place
          (box-wide, so not when repos are named), then every profile

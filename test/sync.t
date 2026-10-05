@@ -61,6 +61,37 @@ wait "$_sleeper" 2>/dev/null
 sy used
 expect used result ok
 
+# === a PARKED shell is not work; a shell running anything is ===============
+# One idle prompt in a tmux pane kept a box's notes repo from ever being
+# pulled. A shell waiting at a prompt is not hurt by a fast-forward; a
+# running program is, and a shell counts the moment it runs one.
+mkrepo parked; upstream_moves parked
+sleep 60 | ( cd "$ROOT/parked" && exec sh -c 'read _x' ) &
+_parked=$!
+sleep 1
+assert "the parked shell really sits inside the repo" \
+  test "$(readlink "/proc/$_parked/cwd")" = "$ROOT/parked"
+sy parked
+expect parked result ok
+assert "a parked shell inside: pulled anyway" \
+  test "$(head_of "$ROOT/parked")" = "$(origin_head parked)"
+kill "$_parked" 2>/dev/null
+wait "$_parked" 2>/dev/null
+# A shell running a child counts, even when the CHILD is elsewhere: it
+# is the shell being busy that matters, not where its child sits.
+mkrepo working; upstream_moves working
+( cd "$ROOT/working" && exec sh -c '(cd / && exec sleep 60); :' ) &
+_work=$!
+sleep 1
+_w_was=$(head_of "$ROOT/working")
+sy working
+expect working result in-use
+assert "a shell running something inside: not pulled" \
+  test "$(head_of "$ROOT/working")" = "$_w_was"
+pkill -P "$_work" 2>/dev/null
+kill "$_work" 2>/dev/null
+wait "$_work" 2>/dev/null
+
 # === a repo whose name extends another's is not "inside" it =================
 mkrepo near; upstream_moves near
 mkdir -p "$ROOT/near-other"

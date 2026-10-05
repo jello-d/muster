@@ -237,7 +237,12 @@ nobody:
       unseen    /proc cannot say who is working, so it will not assume
                 that nobody is
       in-use    a process of yours has its working directory inside the
-                repo (muster's own, and the shell that ran it, excepted)
+                repo (muster's own, and the shell that ran it, excepted).
+                A PARKED shell does not count: an interactive shell with
+                nothing running under it is waiting at a prompt, which a
+                fast-forward cannot hurt. It counts again the moment it
+                runs anything (an editor, even suspended, a test, an
+                agent)
       touched   a tracked file was saved after HEAD last moved (a pull,
                 commit or checkout), even if its content is back to what
                 it was. Ignored files do not count: a build is not a

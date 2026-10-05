@@ -142,7 +142,20 @@ _cu_abort() {
 # _cu_cwds: every working directory of this user's processes, resolved,
 # one per line, LESS muster's own process tree and the chain that invoked
 # it (whoever ran `muster sync` from inside a repo asked for this run; the
-# shell it came from is not "a session in there"). Fails without /proc.
+# shell it came from is not "a session in there"), and LESS every PARKED
+# SHELL: an interactive shell with nothing running under it. Fails
+# without /proc.
+#
+# A PARKED SHELL IS NOT WORK (agreed with the user, 2026-10-05). One idle
+# prompt left in a tmux pane, "parked for observation", kept a box's
+# shared-notes from ever being pulled (90 of 149 runs, up to 13 hours),
+# and every agent there read notes hours old through its CLAUDE.md link.
+# A fast-forward cannot hurt a shell waiting at a prompt: its cwd
+# survives. What it can hurt is a RUNNING program (an editor, a test, a
+# build, an agent), and every one of those is either a process with its
+# own cwd inside or a child of the shell, so the shell counts the moment
+# it runs anything: a suspended `vim` is still its child. A changed file
+# is a different signal again, caught as dirty or `touched`.
 _cu_cwds() {
   [ -r /proc/self/stat ] || return 1
   for _w_f in /proc/[0-9]*/stat; do
@@ -150,18 +163,28 @@ _cu_cwds() {
     # the shell reports that BEFORE a 2>/dev/null on the read applies.
     { IFS= read -r _w_l < "$_w_f"; } 2>/dev/null || continue
     _w_pid=${_w_f#/proc/}; _w_pid=${_w_pid%/stat}
+    # The command name sits in the parentheses (it may hold spaces).
+    _w_c=${_w_l#*'('}; _w_c=${_w_c%')'*}
     # shellcheck disable=SC2086  # "state ppid ...", split on purpose
     set -- ${_w_l##*') '}   # quoted: ksh cannot parse a bare ) here
-    printf '%s %s\n' "$_w_pid" "$2"
-  done | awk -v me="$$" '
-    { pp[$1] = $2; ids[NR] = $1 }
+    printf '%s %s %s\n' "$_w_pid" "$2" "$_w_c"
+  done | awk -v me="$$" \
+    -v sh='^(sh|dash|bash|ksh|ksh93|mksh|pdksh|zsh|yash|posh|fish|tcsh|csh)$' '
+    { pp[$1] = $2; ids[NR] = $1; kid[$2] = 1
+      c = $3; for (i = 4; i <= NF; i++) c = c " " $i
+      sub(/^-/, "", c); cm[$1] = c }
     END {
       for (p = me; p != "" && p > 1; p = pp[p]) skip[p] = 1
       for (i = 1; i <= NR; i++) {
         for (p = ids[i]; p != "" && p > 1; p = pp[p])
           if (p == me) { skip[ids[i]] = 1; break }
       }
-      for (i = 1; i <= NR; i++) if (!(ids[i] in skip)) print ids[i]
+      for (i = 1; i <= NR; i++) {
+        d = ids[i]
+        if (d in skip) continue
+        if (cm[d] ~ sh && !(d in kid)) continue   # a parked shell
+        print d
+      }
     }' | while read -r _w_pid; do
       readlink "/proc/$_w_pid/cwd" 2>/dev/null || :
     done
