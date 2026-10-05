@@ -89,6 +89,14 @@ _ow_repo() {
   elif [ "$SV_AHEAD" -gt 0 ]; then
     _ow_add push
   fi
+  # push_since: the committer time of the OLDEST unpushed commit, so the
+  # push grace runs from the work that has waited longest. A rebase
+  # resets it, as it should: the rebased commits are new.
+  if [ "$SV_AHEAD" -gt 0 ] 2>/dev/null; then
+    OW_PSINCE=$(_sv_git "$1" log --format=%ct "$SV_UPREF..HEAD" 2>/dev/null \
+      | tail -n 1)
+    [ -n "$OW_PSINCE" ] || OW_PSINCE=-
+  fi
 }
 
 # _ow_diverged <path>: rebase only when it provably cannot touch local work:
@@ -248,7 +256,7 @@ ARTS
 # the SV_ facts), printing nothing; see survey_judge for why.
 owed_judge() {
   survey_judge "$@"
-  OW_LIST='' OW_OVERLAP=-
+  OW_LIST='' OW_OVERLAP=- OW_PSINCE=-
   _ow_repo "$2" "$1"
   _ow_artifacts "$2"
   [ -n "$OW_LIST" ] || OW_LIST=nothing
@@ -259,8 +267,9 @@ owed_record() {
   printf 'name=%s owed=%s state=%s ahead=%s behind=%s fetched=%s' \
     "$(_sv_esc "$1")" "$OW_LIST" "$SV_STATE" "$SV_AHEAD" "$SV_BEHIND" \
     "$SV_FETCHED"
-  printf ' overlap=%s artifacts=%s reseed_since=%s path=%s\n' \
-    "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$OW_RSINCE" "$(_sv_esc "$2")"
+  printf ' overlap=%s artifacts=%s reseed_since=%s push_since=%s' \
+    "$(_sv_esc "$OW_OVERLAP")" "$OW_ARTS" "$OW_RSINCE" "$OW_PSINCE"
+  printf ' path=%s\n' "$(_sv_esc "$2")"
 }
 
 # A PENDING RE-SEED IS ONE TASK, not sixteen alerts (agreed with the user,
@@ -275,14 +284,35 @@ owed_record() {
 # owing a re-seed AND anything else stays its own row. Porcelain keeps
 # every record. One rule, here, for both renderers.
 #
-# _ow_grace: the grace, in seconds.
+# _ow_grace [<directive>]: a grace, in seconds, from `reseed-grace` (the
+# default) or the directive named; 60m when the config says nothing.
 _ow_grace() {
-  _g_a=$(_sv_cfg_all reseed-grace | head -n 1)
+  _g_a=$(_sv_cfg_all "${1:-reseed-grace}" | head -n 1)
   if [ -n "$_g_a" ] && _g_s=$(_rn_seconds "$_g_a"); then printf '%s' "$_g_s"
   else printf '%s' 3600
   fi
 }
+
+# AN UNPUSHED COMMIT IS NOT AN ALARM WHILE IT IS FRESH (agreed with the
+# user, 2026-10-05). Measured on one box over a week: 32 episodes of
+# "owes a push", 27 of them settled within the hour by the session that
+# made them, as commit-then-push does. So a `push` debt is attention only
+# once its oldest unpushed commit is older than `push-grace` (default
+# 60m). The row still shows, with how long; a repo owing anything else
+# as well is judged by that too: a row is attention if ANY debt is due.
 OW_RESEED_AWK='
+function due(list, rsince, psince,  n, a, i) {
+  n = split(list, a, ",")
+  for (i = 1; i <= n; i++) {
+    if (a[i] == "nothing" || a[i] == "held") continue
+    if (a[i] == "reseed" && rsince ~ /^[0-9]+$/ && now - rsince < grace)
+      continue
+    if (a[i] == "push" && psince ~ /^[0-9]+$/ && now - psince < pgrace)
+      continue
+    return 1
+  }
+  return 0
+}
 function rs_take(list, since) {
   if (list != "reseed") return 0
   if (since ~ /^[0-9]+$/ && now - since < grace) {
@@ -320,7 +350,7 @@ function rs_line(attn) {
 # table, only the rows that fail the run.
 _ow_render() {
   awk -v mode="$1" -v now="$(date +%s)" -v grace="$(_ow_grace)" \
-    "$OW_RESEED_AWK"'
+    -v pgrace="$(_ow_grace push-grace)" "$OW_RESEED_AWK"'
     function age(t, d) {
       if (t == "-" || t == "never") return t
       d = now - t
@@ -340,6 +370,8 @@ _ow_render() {
           w = add(w, a[i])
       if (f["ahead"] + 0 > 0) w = add(w, "ahead " f["ahead"])
       if (f["behind"] + 0 > 0) w = add(w, "behind " f["behind"])
+      if (f["push_since"] ~ /^[0-9]+$/)
+        w = add(w, "unpushed " age(f["push_since"]))
       if (f["overlap"] != "-") w = add(w, "both changed " f["overlap"])
       n = split(f["artifacts"], a, ",")
       for (i = 1; i <= n; i++)
@@ -362,8 +394,9 @@ _ow_render() {
         if (mode == "porcelain") print
         next
       }
-      # held alone is not attention: being behind is the point of it.
-      rb = (f["owed"] != "nothing" && f["owed"] != "held")
+      # held alone is not attention: being behind is the point of it;
+      # a fresh push or re-seed waits out its grace (due(), above).
+      rb = due(f["owed"], f["reseed_since"], f["push_since"])
       if (rb) bad = 1
       if (mode == "porcelain") { print; next }
       if (mode == "flagged") { if (rb) print; next }

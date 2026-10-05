@@ -139,8 +139,11 @@ _cu_abort() {
 # What a sync declined is not a failure; it is still owed (remaining), so
 # report and the banner say so. Canonicals go first, under the same rules.
 
-# _cu_cwds: every working directory of this user's processes, resolved,
-# one per line, LESS muster's own process tree and the chain that invoked
+# The shells a PARKED one can be (a login shell's leading dash removed).
+CU_SHELLS='^(sh|dash|bash|ksh|ksh93|mksh|pdksh|zsh|yash|posh|fish|tcsh|csh)$'
+
+# _cu_cwds: "<pid> TAB <name> TAB <working directory>" for each of this
+# user's processes, LESS muster's own process tree and the chain that invoked
 # it (whoever ran `muster sync` from inside a repo asked for this run; the
 # shell it came from is not "a session in there"), and LESS every PARKED
 # SHELL: an interactive shell with nothing running under it. Fails
@@ -168,8 +171,7 @@ _cu_cwds() {
     # shellcheck disable=SC2086  # "state ppid ...", split on purpose
     set -- ${_w_l##*') '}   # quoted: ksh cannot parse a bare ) here
     printf '%s %s %s\n' "$_w_pid" "$2" "$_w_c"
-  done | awk -v me="$$" \
-    -v sh='^(sh|dash|bash|ksh|ksh93|mksh|pdksh|zsh|yash|posh|fish|tcsh|csh)$' '
+  done | awk -v me="$$" -v sh="$CU_SHELLS" '
     { pp[$1] = $2; ids[NR] = $1; kid[$2] = 1
       c = $3; for (i = 4; i <= NF; i++) c = c " " $i
       sub(/^-/, "", c); cm[$1] = c }
@@ -183,10 +185,11 @@ _cu_cwds() {
         d = ids[i]
         if (d in skip) continue
         if (cm[d] ~ sh && !(d in kid)) continue   # a parked shell
-        print d
+        print d, cm[d]
       }
-    }' | while read -r _w_pid; do
-      readlink "/proc/$_w_pid/cwd" 2>/dev/null || :
+    }' | while read -r _w_pid _w_cm; do
+      _w_d=$(readlink "/proc/$_w_pid/cwd" 2>/dev/null) || continue
+      printf '%s\t%s\t%s\n' "$_w_pid" "$_w_cm" "$_w_d"
     done
 }
 
@@ -232,10 +235,15 @@ _cu_sync_pull() {
   if _cu_busy "$1"; then CU_RESULT=busy; return 0; fi
   if [ -z "${CU_CWDS_OK:-}" ]; then CU_RESULT=unseen; return 0; fi
   _q_r=$(_sv_resolve "$1")
-  if printf '%s\n' "$CU_CWDS" | awk -v r="$_q_r" \
-      '$0 == r || index($0, r "/") == 1 { f = 1 } END { exit !f }'; then
-    CU_RESULT=in-use; return 0
-  fi
+  # WHO, not just whether (agreed with the user, 2026-10-05): the
+  # decline names a program, preferring one that is not a shell, since
+  # `claude` or `vim` says more than the shell that runs it.
+  CU_INUSE_BY=$(printf '%s\n' "$CU_CWDS" | awk -F '\t' -v r="$_q_r" \
+    -v sh="$CU_SHELLS" '$3 == r || index($3, r "/") == 1 {
+      if (!got || (best ~ sh && $2 !~ sh)) { best = $2; pid = $1; got = 1 } }
+    END { if (got) print best ":" pid }')
+  if [ -n "$CU_INUSE_BY" ]; then CU_RESULT=in-use; return 0; fi
+  CU_INUSE_BY=-
   if _cu_touched "$1"; then CU_RESULT=touched; return 0; fi
   _cu_pull "$1"
 }
@@ -252,7 +260,7 @@ sync_main() {
 # the CU_ globals, printing nothing; see survey_judge for why.
 catchup_judge() {
   owed_judge "$@"
-  CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=-
+  CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=- CU_INUSE_BY=-
   CU_OWED=$OW_LIST
   case ,$OW_LIST, in
     *,pull,*) if [ -n "${CU_SYNC:-}" ]; then _cu_sync_pull "$2"
@@ -280,7 +288,8 @@ catchup_record() {
     "$(_sv_short "$CU_TO")"
   printf ' owed=%s remaining=%s state=%s fetched=%s reseed_since=%s' \
     "$CU_OWED" "$CU_REMAINING" "$SV_STATE" "$SV_FETCHED" "$OW_RSINCE"
-  printf ' path=%s\n' "$(_sv_esc "$2")"
+  printf ' push_since=%s in_use_by=%s path=%s\n' "$OW_PSINCE" \
+    "$(_sv_esc "$CU_INUSE_BY")" "$(_sv_esc "$2")"
 }
 
 # _cu_render <porcelain|table|attention>: exits 1 unless every repo ends owing
@@ -288,7 +297,7 @@ catchup_record() {
 # the table, only the rows that fail the run.
 _cu_render() {
   awk -v mode="$1" -v now="$(date +%s)" -v grace="$(_ow_grace)" \
-    "$OW_RESEED_AWK"'
+    -v pgrace="$(_ow_grace push-grace)" "$OW_RESEED_AWK"'
     {
       split("", f)
       for (i = 1; i <= NF; i++) {
@@ -310,7 +319,7 @@ _cu_render() {
       # held is not attention; a sync that declined (in-use, touched,
       # busy, unseen, diverged) is not a FAILED action: what it left is in
       # remaining, which is what flags it.
-      rb = (f["remaining"] != "nothing" && f["remaining"] != "held") ||
+      rb = due(f["remaining"], f["reseed_since"], f["push_since"]) ||
         (f["result"] !~ /^(-|ok|dry-run|in-use|touched|busy|unseen|diverged)$/)
       if (rb) bad = 1
       if (mode == "porcelain") { print; next }
@@ -318,6 +327,8 @@ _cu_render() {
       if (mode == "attention" && !rb) next
       n++
       nm[n] = f["name"]; ac[n] = f["action"]; rs[n] = f["result"]
+      if (f["in_use_by"] != "" && f["in_use_by"] != "-") {
+        b = f["in_use_by"]; sub(/:[0-9]+$/, "", b); rs[n] = rs[n] ":" b }
       fr[n] = f["from"]; to[n] = f["to"]; rm[n] = f["remaining"]
       if (length(nm[n]) > wn) wn = length(nm[n])
     }
@@ -366,7 +377,7 @@ _cu_canon_first() {
       END { exit !f }' && continue
     catchup_judge canonical "$_p_top"
     CU_PRE="$CU_PRE$_p_key $CU_ACTION $CU_RESULT $(_sv_short "$CU_FROM")"
-    CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED
+    CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED $(_sv_esc "$CU_INUSE_BY")
 "
   done < "$SV_CONFIG"
 }
@@ -381,12 +392,14 @@ _cu_set_record() {
   SV_DO_FETCH=
   owed_judge "$@"
   SV_DO_FETCH=$_s_fetch
-  # shellcheck disable=SC2086  # six space-free fields, split on purpose
+  # shellcheck disable=SC2086  # seven space-free fields, split on purpose
   set -- "$1" "$2" $_s_pre
   printf 'name=%s action=%s result=%s from=%s to=%s owed=%s' \
     "$(_sv_esc "$1")" "$4" "$5" "$6" "$7" "$8"
-  printf ' remaining=%s state=%s fetched=%s reseed_since=%s path=%s\n' \
-    "$OW_LIST" "$SV_STATE" "$SV_FETCHED" "$OW_RSINCE" "$(_sv_esc "$2")"
+  printf ' remaining=%s state=%s fetched=%s reseed_since=%s' \
+    "$OW_LIST" "$SV_STATE" "$SV_FETCHED" "$OW_RSINCE"
+  printf ' push_since=%s in_use_by=%s path=%s\n' "$OW_PSINCE" "$9" \
+    "$(_sv_esc "$2")"
 }
 
 catchup_main() {

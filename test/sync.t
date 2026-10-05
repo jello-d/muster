@@ -54,6 +54,11 @@ sleep 1
 sy used
 expect used action none
 expect used result in-use
+assert "in-use NAMES its blocker" \
+  starts "$(field used in_use_by)" "sleep:"
+OUT=$("$MUSTER" sync used 2>/dev/null)
+assert "...and the table shows it" has "$OUT" "in-use:sleep"
+sy used
 assert "in use (cwd in a SUBDIRECTORY): not pulled" \
   test "$(head_of "$ROOT/used")" = "$_u_was"
 kill "$_sleeper" 2>/dev/null
@@ -80,7 +85,8 @@ wait "$_parked" 2>/dev/null
 # A shell running a child counts, even when the CHILD is elsewhere: it
 # is the shell being busy that matters, not where its child sits.
 mkrepo working; upstream_moves working
-( cd "$ROOT/working" && exec sh -c '(cd / && exec sleep 60); :' ) &
+( cd "$ROOT/working" && exec sh -c '(cd / && exec sleep 60); :' ) \
+  2>/dev/null &
 _work=$!
 sleep 1
 _w_was=$(head_of "$ROOT/working")
@@ -91,6 +97,19 @@ assert "a shell running something inside: not pulled" \
 pkill -P "$_work" 2>/dev/null
 kill "$_work" 2>/dev/null
 wait "$_work" 2>/dev/null
+
+# === the blocker named is the PROGRAM, not the shell running it ============
+mkrepo prog; upstream_moves prog
+# stderr away: the shell reports its child's kill, as noise in the run.
+( cd "$ROOT/prog" && exec sh -c 'sleep 60; :' ) 2>/dev/null &
+_prog=$!
+sleep 1
+sy prog
+assert "a shell and its program both inside: the program is named" \
+  starts "$(field prog in_use_by)" "sleep:"
+pkill -P "$_prog" 2>/dev/null
+kill "$_prog" 2>/dev/null
+wait "$_prog" 2>/dev/null
 
 # === a repo whose name extends another's is not "inside" it =================
 mkrepo near; upstream_moves near

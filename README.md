@@ -175,6 +175,14 @@ run) does an unknown copy make its repo `unknown`.
 Record: `name owed state ahead behind fetched overlap artifacts path`,
 with `artifacts` a comma list of `<relpath>:<verdict>`.
 
+A FRESH UNPUSHED COMMIT IS NOT AN ALARM. A repo owing a `push` is
+attention only once its oldest unpushed commit (by committer date, so a
+rebase starts it over) is older than `push-grace` (default 60m): on one
+box, 27 of a week's 32 such episodes were settled within the hour by
+the session that made the commit. The row still shows, with "unpushed
+<age>"; `--porcelain` carries `push_since`. A row is attention if ANY
+of its debts is due, each push and re-seed after its own grace.
+
 A PENDING RE-SEED IS ONE ITEM. A canonical change makes every vendored
 copy differ at once, on every box, until one box re-seeds and commits
 each repo and the others pull, so as rows it was sixteen alerts per box
@@ -242,7 +250,10 @@ nobody:
                 nothing running under it is waiting at a prompt, which a
                 fast-forward cannot hurt. It counts again the moment it
                 runs anything (an editor, even suspended, a test, an
-                agent)
+                agent). The record names WHO in `in_use_by`
+                (`claude:11576`, a program preferred over the shell
+                running it), the table shows `in-use:claude`, and retro
+                tallies it, so a review can see what holds repos.
       touched   a tracked file was saved after HEAD last moved (a pull,
                 commit or checkout), even if its content is back to what
                 it was. Ignored files do not count: a build is not a
@@ -669,6 +680,8 @@ muster surveys every git repo one level under `~/src`.
                              the relpaths, AND one of the `requires`
                              paths when given (a repo with a hook of its
                              own has not adopted the vendored hook)
+    push-grace <age>         how long an unpushed commit may wait before
+                             it is attention (default 60m)
     reseed-grace <age>       how long a canonical change may wait for its
                              re-seed before it is attention (default
                              60m); until then it is one line, not alarm

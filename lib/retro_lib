@@ -119,7 +119,12 @@ retro_cu_records() {
       *:failed) retro_event pull-failed "$_r_n" ;;
       *:unseen) retro_event unseen "$_r_n" ;;
       none:in-use|none:touched|none:busy|rebase:diverged|none:diverged)
-        retro_tally "declined:$(_st_field "$_r_l" result)" "$_r_n" ;;
+        retro_tally "declined:$(_st_field "$_r_l" result)" "$_r_n"
+        # WHICH program held it: the evidence a review needs before any
+        # rule about long-lived sessions is worth writing.
+        _r_b=$(_st_unesc "$(_st_field "$_r_l" in_use_by)")
+        case $_r_b in -|'') ;; *) retro_tally "in-use-by:${_r_b%:*}" "$_r_n" ;;
+        esac ;;
     esac
   done
 }

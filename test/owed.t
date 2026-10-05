@@ -114,8 +114,8 @@ commit_file "$ROOT/spaced" "a b" "mine" mine
 owed spaced
 expect spaced owed escalate
 expect spaced overlap a%20b
-assert "spaced: the record still has 10 fields" \
-  test "$(rec spaced | awk '{print NF}')" -eq 10
+assert "spaced: the record still has 11 fields" \
+  test "$(rec spaced | awk '{print NF}')" -eq 11
 
 # === what it could not establish is unknown, never a guess ===================
 
@@ -388,7 +388,8 @@ assert "R10: each record's owed list is on its table row" \
     printf '%s\n' "$OUTT" | awk -v n="$_nm" -v o="$_ow" \
       '$1 == n && $2 == o { f = 1 } END { exit !f }' || echo "$_nm"
   done)"
-KEYS='name owed state ahead behind fetched overlap artifacts reseed_since path'
+KEYS='name owed state ahead behind fetched overlap artifacts'
+KEYS="$KEYS reseed_since push_since path"
 assert "every record carries every key, in order" \
   test -z "$(printf '%s\n' "$OUTP" | awk -v want="$KEYS" '{
     s = ""
@@ -483,6 +484,42 @@ for _bad in 'reseed-grace 3w' 'reseed-grace' 'reseed-grace 1h 2h'; do
   printf '%s\n' "$_bad" > "$C/rsbad"
   OUT=$(MUSTER_CONFIG=$C/rsbad "$MUSTER" owed --no-fetch rs1 2>&1); RC=$?
   expect_rc 2 "a bad reseed-grace line: $_bad"
+done
+
+# === an unpushed commit waits out the push grace ==========================
+# 27 of 32 "owes a push" episodes on one box settled within the hour, by
+# the session that made the commit. So a push is attention only once its
+# OLDEST unpushed commit is older than `push-grace` (default 60m).
+mkrepo pfresh
+commit_file "$ROOT/pfresh" w "x" "just now"
+mkrepo pold
+printf 'y\n' > "$ROOT/pold/w"
+g "$ROOT/pold" add w
+GIT_COMMITTER_DATE="@$(( $(date +%s) - 7200 )) +0000" \
+  git -C "$ROOT/pold" commit -q -m "two hours ago"
+OUT=$("$MUSTER" owed --porcelain --no-fetch pfresh pold 2>/dev/null)
+expect pfresh owed push
+expect pfresh push_since "$(git -C "$ROOT/pfresh" log -1 --format=%ct)"
+OUT=$("$MUSTER" owed --no-fetch pfresh 2>/dev/null); RC=$?
+expect_rc 0 "a fresh unpushed commit: not attention"
+assert "...but shown, with how long" has "$OUT" "unpushed "
+OUT=$("$MUSTER" owed --no-fetch pold 2>/dev/null); RC=$?
+expect_rc 1 "an unpushed commit two hours old: attention"
+printf 'push-grace 3h\n' > "$C/pg"
+OUT=$(MUSTER_CONFIG=$C/pg "$MUSTER" owed --no-fetch pold 2>/dev/null); RC=$?
+expect_rc 0 "push-grace 3h: two hours is not yet attention"
+printf 'profile pp owed 1h pfresh\nprofile po owed 1h pold\n' > "$C/pp"
+MUSTER_CONFIG=$C/pp "$MUSTER" run pp >/dev/null 2>&1
+MUSTER_CONFIG=$C/pp "$MUSTER" run po >/dev/null 2>&1
+OUT=$(MUSTER_CONFIG=$C/pp "$MUSTER" report --porcelain 2>/dev/null)
+assert "a stored run: the fresh push is not attention" \
+  has "$(printf '%s\n' "$OUT" | grep '^profile=pp ')" "attention=0 "
+assert "a stored run: the old push is" \
+  has "$(printf '%s\n' "$OUT" | grep '^profile=po ')" "attention=1 "
+for _bad in 'push-grace 2w' 'push-grace' 'push-grace 1h 2h'; do
+  printf '%s\n' "$_bad" > "$C/pgbad"
+  OUT=$(MUSTER_CONFIG=$C/pgbad "$MUSTER" owed --no-fetch pold 2>&1); RC=$?
+  expect_rc 2 "a bad push-grace line: $_bad"
 done
 
 h_verdict

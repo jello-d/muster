@@ -67,6 +67,8 @@ assert "with its from..to" has "$(evk pulled pulled)" "detail="
 assert "a decline is a TALLY, not an event" \
   has "$(tl)" "declined:in-use busy 1"
 assert "and not an event" test -z "$(evk in-use busy)"
+assert "WHO held it is tallied, for the review" \
+  has "$(tl)" "in-use-by:sleep busy 1"
 
 # === a run: the profile is the origin, and the run is tallied ==============
 upstream_moves pulled
@@ -80,7 +82,12 @@ assert "the run is tallied" has "$(tl)" "run:ok fl 1"
 
 # === episodes: began once, settled once, with how long =====================
 mkrepo ahead
-commit_file "$ROOT/ahead" a "x" "unpushed"
+# Two hours old: a FRESH unpushed commit waits out the push grace and
+# opens no episode, which is the rule; this one is due.
+printf 'x\n' > "$ROOT/ahead/a"
+g "$ROOT/ahead" add a
+GIT_COMMITTER_DATE="@$(( $(date +%s) - 7200 )) +0000" \
+  git -C "$ROOT/ahead" commit -q -m "unpushed, two hours ago"
 printf 'profile w owed 1h ahead\n' > "$MUSTER_CONFIG"
 rm -f "$R/open"
 : > "$R/open"

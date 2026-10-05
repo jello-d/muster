@@ -55,7 +55,9 @@ catchup disjoint
 expect disjoint action rebase
 expect disjoint result ok
 expect disjoint remaining push
-expect_rc 1 "a rebase leaves a push owed"
+# Owed, and recorded as owed; but its commits were rebased seconds ago,
+# so it waits out the push grace before it is attention.
+expect_rc 0 "a rebase leaves a push owed, not yet attention (push grace)"
 assert "rebase: origin's head is now an ancestor" \
   git -C "$ROOT/disjoint" merge-base --is-ancestor \
   "$(origin_head disjoint)" HEAD
@@ -257,7 +259,8 @@ assert "R10: one table row per record, plus the header" \
   test "$(printf '%s\n' "$OUTT" | wc -l)" \
   -eq "$(( $(printf '%s\n' "$OUTP" | wc -l) + 1 ))"
 assert "table: has a header" starts "$OUTT" REPO
-KEYS='name action result from to owed remaining state fetched reseed_since path'
+KEYS='name action result from to owed remaining state fetched'
+KEYS="$KEYS reseed_since push_since in_use_by path"
 assert "every record carries every key, in order" \
   test -z "$(printf '%s\n' "$OUTP" | awk -v want="$KEYS" '{
     s = ""
