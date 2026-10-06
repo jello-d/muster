@@ -700,7 +700,8 @@ Optional, at `$MUSTER_CONFIG` or `~/.config/muster/repos`. Without it,
 muster surveys every git repo one level under `~/src` (until `manage` is
 required: see What it does).
 
-    manage <repo|path>       what this box manages, one kind a line; the
+    manage <repo|path>       what this box manages, one kind a line,
+                             anywhere in the file (first reads best); the
                              lines below belong to `repo` unless they are
                              placement's (place, policy, capture)
     root <dir>               where discovery looks

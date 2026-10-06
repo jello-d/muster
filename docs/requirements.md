@@ -225,6 +225,11 @@ MUST BE TRUE:
 - One kind per line, `manage repo` and `manage path`. Both on one line
   would read as "the repo path", which `repo <name> [<path>]` already
   means. A repeated line or an unknown kind is a config error.
+- POSITION IS NOT LOAD-BEARING: every `manage` line is read before any
+  other line is judged, so a generator may append them (measured: with
+  `manage path` last, the lines above it were judged against it, and a
+  repo line above it was refused by line number). First is the
+  readable order, and recommended.
 - NO `manage` LINE IS A CONFIG ERROR, and so is NO CONFIG: exit 2 for
   every verb except `help`, naming the lines to add. Nothing is inferred
   from the other lines present, which would be a second classification
