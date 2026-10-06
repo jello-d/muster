@@ -351,12 +351,12 @@ _pl_writable() {
   [ -w "$_w_d" ] && { [ ! -e "$1" ] || [ -w "$1" ]; }
 }
 
+# What `place` repairs. merge-back and capture are drift to the write
+# guard (a path the user cannot write is read-only, whatever it is owed)
+# and not to a path profile, since no profile ever merges back.
+PL_DRIFT='new missing place converged migrate migrate-dir displace orphan'
 _pl_drift_verdict() {
-  case $1 in
-    new|missing|place|converged|migrate|migrate-dir|merge-back|displace|\
-    orphan|capture)
-      return 0 ;;
-  esac
+  case " $PL_DRIFT merge-back capture " in *" $1 "*) return 0 ;; esac
   return 1
 }
 
@@ -387,10 +387,12 @@ _pl_rec_cb() {
 # record each.
 placement_records() { PL_RETIRE=''; _pl_dest_walk _pl_rec_cb records; }
 
-# _pl_render <porcelain|table|flagged>: exit 1 unless every file is in
-# sync (app-held and unmanaged are in sync by definition: not ours).
+# _pl_render <porcelain|table|flagged|drift>: exit 1 unless every file is
+# in sync (app-held and unmanaged are in sync by definition: not ours).
+# `drift` prints only what `place` repairs, for a path profile (run_lib).
 _pl_render() {
-  awk -v mode="$1" '
+  awk -v mode="$1" -v drift="$PL_DRIFT" '
+    BEGIN { n = split(drift, d, " "); for (i = 1; i <= n; i++) dv[d[i]] = 1 }
     {
       split("", f)
       for (i = 1; i <= NF; i++) {
@@ -404,6 +406,7 @@ _pl_render() {
       if (rb) bad = 1
       if (mode == "porcelain") { print; next }
       if (mode == "flagged") { if (rb) print; next }
+      if (mode == "drift") { if (v in dv) print; next }
       n++; pa[n] = f["path"]; vd[n] = v; po[n] = f["policy"]
       if (length(vd[n]) > wv) wv = length(vd[n])
     }
@@ -759,10 +762,34 @@ _pl_git_status() {
     -C "$(dirname -- "$1")" status --porcelain -- "$1" 2>/dev/null
 }
 
+# pl_in_worktree <source file>: is it inside a git WORK TREE? Asked of
+# the nearest directory that exists, since a captured file's source
+# directory may not exist yet.
+pl_in_worktree() {
+  _wt_d=$(dirname -- "$1")
+  while [ ! -d "$_wt_d" ]; do _wt_d=$(dirname -- "$_wt_d"); done
+  [ "$(git -C "$_wt_d" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]
+}
+
+# _pl_durable <source file>: merge-back and capture write into a source
+# WORKING TREE (P5), and only there. A source that is not one (an
+# installed payload, which the next install overwrites) would take the
+# write, report success, and lose the edit: measured, exit 0. Refused
+# instead, as a failure, so the verb exits 2 and nothing is written.
+_pl_durable() {
+  pl_in_worktree "$1" && return 0
+  printf 'refused    %s: its source %s is not in a git work tree, so' \
+    "$PL_D" "$1"
+  printf ' nothing durable can take the edit; make it upstream\n'
+  echo x >> "$PL_FAILS"
+  return 1
+}
+
 # _pl_merge_cb: P5. Into the source WORKING TREE only, never committing,
 # and never into a source file git reports as modified (someone mid-edit).
 _pl_merge_cb() {
   [ "$PL_V" = merge-back ] || return 0
+  _pl_durable "$PL_S" || return 0
   if [ -n "$(_pl_git_status "$PL_S")" ]; then
     printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
       "$PL_D" "$PL_S"; return 0
@@ -870,6 +897,7 @@ _pl_is_source() {
 # committing, never over a source file git reports modified.
 _pl_capture_cb() {
   [ "$PL_V" = capture ] || return 0
+  _pl_durable "$PL_S" || return 0
   if [ -e "$PL_S" ] && [ -n "$(_pl_git_status "$PL_S")" ]; then
     printf 'skipped    %s: %s is modified in git; leaving it alone\n' \
       "$PL_D" "$PL_S"; return 0

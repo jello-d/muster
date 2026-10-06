@@ -38,8 +38,12 @@
 # to be a finding.
 
 # shellcheck disable=SC2034  # read by survey_lib's config check
-RUN_VERBS='survey owed catch-up sync'
-RUN_ACTING='catch-up sync'
+# `placed` and `place` are the PATH verbs (R12): a profile over every
+# placed path, so a box that only places has something on a timer. They
+# take no repo selectors. No profile verb merges back or captures, as no
+# profile verb pushes: those are a person's.
+RUN_VERBS='survey owed catch-up sync placed place'
+RUN_ACTING='catch-up sync place'
 # THE DRIVER WHEN NONE IS DECLARED: manual (agreed 2026-10-01), so a
 # standalone muster is not nagged about timers nobody asked for, and
 # nothing is scheduled that was not declared. It was systemd for one
@@ -91,6 +95,9 @@ run_profiles() {
     }')
   fi
   if [ -n "$_f_out" ]; then printf '%s\n' "$_f_out"
+  # No implicit profile on a box that does not manage repos (R12): it
+  # would be a repo profile over nothing, and could never run.
+  elif ! sv_manages repo; then :
   # The default is NAMED `default`, never after its verb: `profile owed
   # owed` made `muster owed` (the verb, ad hoc) and `muster run owed`
   # (the profile, which also stores and notifies) look like one command,
@@ -133,8 +140,10 @@ _rn_acting() { case " $RUN_ACTING " in *" $1 "*) return 0 ;; esac; return 1; }
 _rn_overlaps() {
   run_profiles | while read -r _o_n _o_v _o_e _o_d _o_sel; do
     _rn_acting "$_o_v" || continue
+    # A path profile acts on every placed path, so two always overlap.
     # shellcheck disable=SC2086  # selectors are words
-    if [ -n "$_o_sel" ]; then _o_names=$(_rn_expand $_o_sel)
+    if [ "$(sv_verb_kind "$_o_v")" = path ]; then _o_names='(placement)'
+    elif [ -n "$_o_sel" ]; then _o_names=$(_rn_expand $_o_sel)
     else _o_names=$(SV_RECORD_FN=_rn_name_only survey_records)
     fi
     printf '%s\n' "$_o_names" | awk -v p="$_o_n" 'NF { print p, $0 }'
@@ -204,8 +213,13 @@ _rn_flagged() {
     owed) _rn_r=_ow_render _rn_k='owed state' _rn_v=owed ;;
     catch-up|sync) _rn_r=_cu_render _rn_k='remaining result' \
       _rn_v=remaining ;;
+    # A path profile's rows are its DRIFT: faults go to the config store
+    # (muster.config), which every run fills, so nothing is counted twice.
+    placed|place) _rn_r=_pl_render _rn_k='verdict' _rn_v=verdict ;;
   esac
-  "$_rn_r" flagged < "$2" 2>/dev/null | awk -v keys="$_rn_k" \
+  _rn_m=flagged
+  [ "$(sv_verb_kind "$1")" != path ] || _rn_m=drift
+  "$_rn_r" "$_rn_m" < "$2" 2>/dev/null | awk -v keys="$_rn_k" \
     -v vk="$_rn_v" -v now="$(date +%s)" -v max="$RN_UNREACH_MAX" '{
     split("", f)
     for (i = 1; i <= NF; i++) {
@@ -214,7 +228,7 @@ _rn_flagged() {
     if (f[vk] == "unknown" && ("," f["state"] ",") ~ /,fetch-failed,/ \
       && f["fetched"] ~ /^[0-9]+$/ && now - f["fetched"] < max) next
     n = split(keys, ks, " ")
-    o = f["name"]
+    o = ("name" in f) ? f["name"] : f["path"]
     for (i = 1; i <= n; i++) o = o " " f[ks[i]]
     print o
   }' | sort
@@ -346,6 +360,9 @@ _rn_invoke() {
   fi >&2
   # MUSTER_ORIGIN: the verb records its own actions in retro, as this
   # profile's. Set on an EXTERNAL command, so it cannot outlive the call.
+  if [ "$(sv_verb_kind "$RN_VERB")" = path ]; then
+    _rn_invoke_path "$1"; return
+  fi
   [ -n "$RN_SEL" ] || {
     MUSTER_ORIGIN=$1 "$MUSTER_BIN" "$RN_VERB" --porcelain; return; }
   # shellcheck disable=SC2086  # selectors are words
@@ -363,6 +380,25 @@ _rn_invoke() {
   set -- $_i_names
   IFS=$_i_old
   MUSTER_ORIGIN=$_i_p "$MUSTER_BIN" "$RN_VERB" --porcelain -- "$@"
+}
+
+# _rn_invoke_path <profile>: a path profile. `place` acts first (what it
+# did goes to the run's err log; each placement is also tallied by the
+# verb), then the records are a fresh `placed`. The exit is the DRIFT
+# alone, 1 when any is left: faults are the config store's, flagged as
+# muster.config, so a fault never reads as this profile needing a run.
+_rn_invoke_path() {
+  if [ "$RN_VERB" = place ]; then
+    _ip_rc=0
+    MUSTER_ORIGIN=$1 "$MUSTER_BIN" place >&2 </dev/null || _ip_rc=$?
+    [ "$_ip_rc" -lt 2 ] || { echo "muster: place could not complete" >&2
+      return 2; }
+  fi
+  _ip_rc=0
+  _ip_rec=$("$MUSTER_BIN" placed --porcelain </dev/null) || _ip_rc=$?
+  [ "$_ip_rc" -lt 2 ] || return 2
+  [ -z "$_ip_rec" ] || printf '%s\n' "$_ip_rec"
+  [ -z "$(printf '%s\n' "$_ip_rec" | _pl_render drift)" ]
 }
 
 # CONFIG FAULTS REACH THE BANNER (agreed with the user, 2026-10-03). A
@@ -474,8 +510,11 @@ _rn_run_locked() {
     '$_q_box/pid'; rmdir '$2/lock' '$_q_box' 2>/dev/null" EXIT
   _q_rc=0
   _rn_invoke "$1" >"$3.records" 2>"$3.err" </dev/null || _q_rc=$?
-  # Still holding the box: the refs as this run LEFT them.
-  _rn_heads "$3.records" >"$3.heads" 2>/dev/null || :
+  # Still holding the box: the refs as this run LEFT them. A path
+  # profile's records are files, which have no refs.
+  if [ "$(sv_verb_kind "$RN_VERB")" = path ]; then : >"$3.heads"
+  else _rn_heads "$3.records" >"$3.heads" 2>/dev/null || :
+  fi
   _rn_config_scan
   retro_run "$1" "$RN_VERB" "$3.records" "$3.err" "$_q_rc"
   # Released: disarm the box paths FIRST, so an interruption from here on
@@ -765,5 +804,12 @@ _rn_render_attention() {   # <verb>: records on stdin
     survey) _sv_render attention ;;
     owed) _ow_render attention ;;
     catch-up|sync) _cu_render attention ;;
+    placed|place) _pl_render drift | awk '{
+        split("", f)
+        for (i = 1; i <= NF; i++) {
+          k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v)
+          f[k] = v
+        }
+        printf "%-10s %s\n", f["verdict"], f["path"] }' ;;
   esac || :
 }

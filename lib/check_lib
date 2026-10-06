@@ -57,7 +57,9 @@ _ck_profile() {
     _ck_add fault "interval   $_p_n: driven by $_p_d with no interval to" \
       "judge its runs against"
   fi
-  if [ "$#" = 0 ]; then
+  if [ "$(sv_verb_kind "$_p_v")" = path ]; then
+    _p_names='(every placed path)'
+  elif [ "$#" = 0 ]; then
     _p_names="all ($(SV_RECORD_FN=_rn_name_only survey_records \
       | grep -c . || :))"
   else
@@ -109,6 +111,23 @@ _ck_stores() {
   done
 }
 
+# _ck_manage <profiles>: R12's two notes. No `manage` line (step 1 keeps
+# today's behaviour, and step 3 will refuse it), and a box managing paths
+# with no profile watching them: nothing would ever feed its banner.
+_ck_manage() {
+  if ! sv_manage_declared; then
+    _ck_add note "manage     none declared, so this box manages both" \
+      "kinds as before; declare what it manages (\`manage repo\`," \
+      "\`manage path\`, one a line): a coming release requires it"
+    return 0
+  fi
+  sv_manages path || return 0
+  printf '%s\n' "$1" | awk '$2 == "placed" || $2 == "place" { f = 1 }
+    END { exit !f }' && return 0
+  _ck_add note "manage     \`manage path\` and no profile runs placed or" \
+    "place, so nothing feeds the banner; e.g. \`profile config placed 1h\`"
+}
+
 # _ck_retro: whether a review is due: the record covers more than a
 # quarter and no `muster retro done` falls in the last one. The cadence
 # agreed with the user as DATA rather than as a note to remember: a
@@ -151,6 +170,7 @@ check_main() {
   printf '%-12s  %-8s  %-5s  %-8s  %s\n' PROFILE VERB EVERY DRIVER REPOS
   _c_list=$(run_profiles)
   while read -r _c_n _c_v _c_e _c_d _c_sel; do
+    [ -n "$_c_n" ] || continue
     # shellcheck disable=SC2086  # selectors are words
     _ck_profile "$_c_n" "$_c_v" "$_c_e" "$_c_d" $_c_sel
     _ck_runs "$(_rn_status "$_c_n" "$_c_v" "$_c_e" "$_c_d")"
@@ -171,6 +191,7 @@ HOLDS
   done <<STORES
 $_c_os
 STORES
+  _ck_manage "$_c_list"
   _c_rv=$(_ck_retro)
   [ -z "$_c_rv" ] || _ck_add note "retro      $_c_rv"
   _c_ov=$(_rn_overlaps)
@@ -219,15 +240,25 @@ placement_findings() {
       in-sync|app-held|unmanaged) ;;
       new|missing|place|converged|migrate|migrate-dir|displace|orphan)
         echo "drift place      $_g_v $_g_p" ;;
-      capture) echo "fault capture    $_g_p: an application's work not" \
-        "yet in the source; review it (muster diff), then muster capture" ;;
       shadowed) echo "fault place      shadowed $_g_p: a more specific" \
         "root owns this path; remove it from one of the two sources" ;;
       source-link) echo "fault place      source-link $_g_p: its source" \
         "is a symlink, which is never placed; make it a file or move it" \
         "out of the root" ;;
-      merge-back) echo "fault merge-back $_g_p: a live edit not yet" \
-        "in the source; review it (muster diff), then muster merge-back" ;;
+      merge-back|capture)
+        _g_s=$(_st_unesc "$(_st_field "$_g_r" source)")
+        if ! pl_in_worktree "$_g_s"; then
+          echo "fault $(printf '%-10s' "$_g_v") $_g_p: a live edit, and" \
+            "its source $_g_s is not" \
+            "in a git work tree, so it cannot be merged back; make the" \
+            "edit upstream (muster diff shows it)"
+        elif [ "$_g_v" = capture ]; then
+          echo "fault capture    $_g_p: an application's work not yet in" \
+            "the source; review it (muster diff), then muster capture"
+        else
+          echo "fault merge-back $_g_p: a live edit not yet in the source;" \
+            "review it (muster diff), then muster merge-back"
+        fi ;;
       layered) echo "fault place      layered $_g_p: supplied by two" \
         "layers, $(_st_unesc "$(_st_field "$_g_r" source)") and" \
         "$(_st_unesc "$(_st_field "$_g_r" also)"); nothing is placed until" \

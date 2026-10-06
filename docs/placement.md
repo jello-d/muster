@@ -175,6 +175,13 @@ working tree and stops. It never commits, never pushes, and never writes
 into a source file that git reports as modified (someone is mid-edit:
 R8).
 
+AND ONLY A WORK TREE (2026-10-05, found during T17): a source that is
+not inside a git work tree (an installed payload, which the next install
+overwrites) took a merge-back, printed `merged`, exit 0, and would have
+lost the edit at the next install. Merge-back and capture now REFUSE
+such a source, exit 2, writing nothing, and check's fault says to make
+the edit upstream. A payload-sourced layer should be `repo-owned`.
+
 "Which source commit was this baseline placed from" is a checkable fact,
 DERIVED FROM GIT, never stored: the baseline's content, hashed as a git
 blob, is looked up in that source file's history,

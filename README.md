@@ -41,6 +41,20 @@ because mutating work can demand them.
 
 Diagnose with nothing, repair with tools.
 
+And two KINDS of thing it manages, declared per box (R12):
+
+    manage repo      git repositories as wholes: survey, owed, sync,
+                     catch-up, push, stamp, vendored copies, deployed
+                     clones
+    manage path      files placed from a source tree: placed, place,
+                     merge-back, capture, diff, where, displaced, retire
+
+One kind a line. A box takes either or both: a server that only places
+config declares `manage path` and has no repo machinery at all. A verb,
+config line or profile of a kind the box does not declare is refused
+(exit 2, naming the missing line). With NO `manage` line muster behaves
+as before (both) and `check` notes it; a coming release will require it.
+
 ## What it is not
 
 - Not a release coordinator. A verification that outlives its tree needs a
@@ -391,14 +405,19 @@ command typed by hand is `manual`, and `resolve` tags its own.
 
 ### Profiles, run and report
 
-A profile is a POLICY OVER A SET OF REPOS: a verb, how often, and
-which repos.
+A profile is a POLICY OVER A SET OF REPOS, or over every placed path:
+a verb, how often, and which repos.
 
     driver <systemd|external|manual>
     notify </absolute/path>
     profile <name> <verb> <interval> [driver=<d>] [<selector>...]
         verb       survey, owed, sync or catch-up (sync and catch-up
-                   act, so two of them may not select the same repo)
+                   act, so two of them may not select the same repo);
+                   or placed (observe) or place (act), over EVERY
+                   placed path, taking no selectors, so two `place`
+                   profiles always overlap. A path profile's rows are
+                   its drift; its faults are muster.config's. No
+                   profile merges back or captures
         interval   30m, 2h, 1d; or - for a manual profile
         driver     WHO RUNS it: muster's own timers (systemd), the
                    integrator's scheduler calling `muster run` (external),
@@ -410,6 +429,7 @@ which repos.
     profile watch  owed     1h                   # everything, observed
     profile canon  catch-up 15m shared-notes     # one repo, kept current
     profile quiet  catch-up 2h  /h.*/ charon     # a group, by rule
+    profile config placed   1h                   # placement, observed
 
 The driver is the user's INTENT, and `muster check` squares it against
 what is here. With no `driver` line, profiles are `manual`: run on
@@ -677,8 +697,12 @@ records, never computed separately.
 ### Configuration
 
 Optional, at `$MUSTER_CONFIG` or `~/.config/muster/repos`. Without it,
-muster surveys every git repo one level under `~/src`.
+muster surveys every git repo one level under `~/src` (until `manage` is
+required: see What it does).
 
+    manage <repo|path>       what this box manages, one kind a line; the
+                             lines below belong to `repo` unless they are
+                             placement's (place, policy, capture)
     root <dir>               where discovery looks
     repo <name> [<path>]     declare the set; any `repo` line turns
                              discovery off. path defaults to root/name

@@ -236,7 +236,7 @@ _rs_push() {
 
 # _rs_act <dry> [name...]: steps 1 and 2; run under the box lock.
 _rs_act() {
-  _rs_repos "$@"
+  if sv_manages repo; then _rs_repos "$@"; fi
   _a_dry=$1; shift
   if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then _rs_config "$_a_dry"; fi
 }
@@ -255,11 +255,18 @@ resolve_main() {
     shift
   done
   survey_config || return 2
+  # Each step only for a kind this box manages (R12); a named repo or
+  # --push is a repo request, so it needs `manage repo`.
+  if ! sv_manages repo && { [ "$#" -gt 0 ] || [ -n "$_m_push" ]; }; then
+    echo "muster resolve: repos named or --push, and this box does not" \
+      "manage repos (no \`manage repo\` line in $SV_CONFIG)" >&2
+    return 2
+  fi
   RS_NEED='' RS_BROKE='' RS_UNFETCHED=''
   run_box_locked resolve _rs_act "$_m_dry" "$@" || return 2
   [ -z "$_m_push" ] || _rs_push "$_m_dry" "$@"
   [ -n "$_m_dry" ] || _rs_refresh
-  _rs_owed_needs "$_m_dry" "$@"
+  if sv_manages repo; then _rs_owed_needs "$_m_dry" "$@"; fi
   if [ "$#" = 0 ] && [ -n "$(_pl_roots)" ]; then
     _rs_place_needs "$_m_dry"
   fi

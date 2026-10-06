@@ -73,6 +73,10 @@ usage() {
   cat <<'EOF'
 usage: muster <command> [options]
 
+A box declares what it manages, one kind a line in the config: `manage
+repo` (the repo commands) and `manage path` (the placement commands). A
+command of a kind not declared exits 2. With none declared, both, for now.
+
 commands:
   survey [--porcelain] [--fetch] [name...]
          report the state of every repo in the set: dirty, ahead, behind
@@ -115,7 +119,9 @@ commands:
          catch-up, and nothing else changes
   run    <profile>
          run a declared profile and store its records under
-         ~/.local/state/muster/<profile>; what timers call
+         ~/.local/state/muster/<profile>; what timers call. A profile's
+         verb is survey, owed, sync, catch-up, or placed / place (every
+         placed path)
   report [--porcelain]
          every profile's latest STORED run: age, status, and the rows
          that need attention. A run older than twice its interval is
@@ -182,6 +188,10 @@ exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
       that needs a person (and outranks 1)
 EOF
 }
+
+# A verb of a kind this box does not manage stops here (R12), before its
+# own config read, so the message is the same for every verb.
+[ "$#" = 0 ] || sv_manage_gate "$1" || exit 2
 
 case ${1:-} in
   survey) shift; survey_main "$@" ;;

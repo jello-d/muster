@@ -188,11 +188,15 @@ times it described a tree that no longer existed. Nothing detected this;
 it was noticed by hand. Detecting invalidation is tractable, and it is the
 honest half of the release problem muster is otherwise staying out of.
 
-### R12. What a box manages is DECLARED, never inferred (PROPOSED)
+### R12. What a box manages is DECLARED, never inferred (AGREED)
 
-PROPOSED 2026-10-05. The names and both decisions below were agreed with
-the user; the integrator has not yet concurred (T17 in its requests
-file).
+PROPOSED 2026-10-05, names and decisions agreed with the user; drydock
+concurred the same day (T17), amended so each integrator emits a
+`manage` line exactly when it writes a line of that kind. tackup's
+concurrence is open. STEP 1 BUILT: `manage` enforced where declared,
+`placed`/`place` profiles, check's two notes, and merge-back and capture
+refusing a source outside a git work tree (found during T17: a payload
+source took the write, exit 0, and the next install would erase it).
 
 WHY: muster does two things, and a box may want either or both. Measured
 on a scratch config holding only a `place` line: `check` listed an
