@@ -28,16 +28,23 @@ echo 'a' > "$SRC/a.conf"
 git init -q "$SRC"; g "$SRC" add -A; g "$SRC" commit -m seed
 PLACE="place $SRC $DST user-editable"
 
-# === no manage line: today's behaviour, and a note =========================
+# === no manage line, or no config: an error naming both lines (step 3) ===
 printf '%s\n' "$PLACE" > "$MUSTER_CONFIG"
+for _v in survey placed check report "run x" resolve; do
+  # shellcheck disable=SC2086  # "run x" is two words on purpose
+  cli $_v
+  expect_rc 2 "no manage line: $_v refuses"
+  assert "$_v: says what to declare" \
+    has "$ERR" "no \`manage\` line in $MUSTER_CONFIG: declare what this box"
+done
+assert "it names both kinds" has "$ERR" "\`manage repo\`"
+assert "both" has "$ERR" "\`manage path\`"
+rm -f "$MUSTER_CONFIG"
 cli survey one
-expect_rc 0 "no manage line: repo verbs still run"
-cli placed
-expect_rc 1 "no manage line: path verbs still run (a new file)"
-cli check
-assert "no manage line: check notes it" \
-  has "$OUT" "note   manage     none declared"
-assert "and keeps the implicit profile" has "$OUT" "default"
+expect_rc 2 "no config at all: refused, never a guess"
+assert "and says there is none" has "$ERR" "there is no config at"
+cli help
+expect_rc 0 "help needs no config"
 
 # === manage path only ======================================================
 printf 'manage path\n%s\n' "$PLACE" > "$MUSTER_CONFIG"

@@ -297,9 +297,11 @@ survey_record() {
     "$(_sv_esc "$2")"
 }
 
-# THE CONFIG is optional, and is where an integrator declares facts about
-# its fleet. muster's own defaults stand without it (discover every repo
-# one level under the root). One directive per line, # comments:
+# THE CONFIG is where an integrator declares facts about its fleet. It is
+# REQUIRED for one of them, the `manage` lines (R12); for everything else
+# muster's own defaults stand (with `manage repo` and no `repo` lines,
+# discover every repo one level under the root). One directive per line,
+# # comments:
 #
 #   root <dir>               where discovery looks (default ~/src)
 #   repo <name> [<path>]     declare the set explicitly; any `repo` line
@@ -347,10 +349,8 @@ survey_record() {
 #                            (survey, owed, sync, catch-up, push, stamp),
 #                            and `path`, placed files (place, merge-back,
 #                            capture, ...). A line, verb or profile of a
-#                            kind not declared is an error. With NO
-#                            manage line muster still behaves as before
-#                            (both), and check notes it: that is
-#                            temporary (R12 step 1); it will be an error
+#                            kind not declared is an error, and so is
+#                            no manage line at all
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -417,9 +417,14 @@ _sv_cfg_selector() {
 }
 
 _sv_cfg_check() {   # validate the whole file before anything is read from it
-  [ -e "$SV_CONFIG" ] || return 0
+  # WHAT A BOX MANAGES IS DECLARED, NEVER GUESSED (R12): no config, or a
+  # config with no `manage` line, is an error naming the lines to add.
+  [ -e "$SV_CONFIG" ] || { _sv_cfg_no_manage "there is no config at"
+    return 1; }
   [ -r "$SV_CONFIG" ] \
     || { echo "muster: cannot read config $SV_CONFIG" >&2; return 1; }
+  sv_manage_declared || { _sv_cfg_no_manage "no \`manage\` line in"
+    return 1; }
   _sv_cfg_lines && _sv_cfg_manage && _sv_cfg_place_dups \
     && _sv_cfg_policies
 }
@@ -446,24 +451,24 @@ sv_verb_kind() {
   esac
 }
 
+_sv_cfg_no_manage() {   # <why, ending before the path>
+  echo "muster: $1 $SV_CONFIG: declare what this box manages, one kind" \
+    "a line: \`manage repo\` (git repositories), \`manage path\`" \
+    "(placed files), or both" >&2
+}
+
 # sv_manage_declared: are there any `manage` lines at all?
 sv_manage_declared() { [ -n "$(_sv_cfg_all manage)" ]; }
 
-# sv_manages <repo|path>: does this box manage that kind? Declared, or,
-# UNTIL R12 STEP 3, no manage line at all (today's behaviour: both).
-sv_manages() {
-  sv_manage_declared || return 0
-  _sv_cfg_all manage | grep -qxF "$1"
-}
+# sv_manages <repo|path>: does this box declare that kind?
+sv_manages() { _sv_cfg_all manage | grep -qxF "$1"; }
 
 # _sv_cfg_manage: a kind declared twice, and every line of a kind the box
-# does not manage, named with its line number. Only once something is
-# declared: an undeclared config is step 1's note, not an error.
+# does not manage, named with its line number.
 _sv_cfg_manage() {
   _g_dup=$(_sv_cfg_all manage | sort | uniq -d | head -n 1)
   [ -z "$_g_dup" ] || { echo "muster: $SV_CONFIG: \`manage $_g_dup\`" \
     "is declared twice" >&2; return 1; }
-  sv_manage_declared || return 0
   _g_n=0
   while read -r _g_kw _g_a _g_b || [ -n "$_g_kw" ]; do
     _g_n=$((_g_n + 1))
@@ -485,6 +490,9 @@ sv_manage_gate() {
   _gt_k=$(sv_verb_kind "$1")
   [ -n "$_gt_k" ] || return 0
   SV_CONFIG=${MUSTER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/muster/repos}
+  # Nothing declared at all: the verb's own config check says so, naming
+  # both lines, which is the more useful message.
+  sv_manage_declared || return 0
   sv_manages "$_gt_k" && return 0
   echo "muster: $1 acts on the $_gt_k kind, and this box does not manage" \
     "it (no \`manage $_gt_k\` line in $SV_CONFIG)" >&2

@@ -75,7 +75,8 @@ usage: muster <command> [options]
 
 A box declares what it manages, one kind a line in the config: `manage
 repo` (the repo commands) and `manage path` (the placement commands). A
-command of a kind not declared exits 2. With none declared, both, for now.
+command of a kind not declared exits 2, and so does every command but
+help when nothing is declared, or there is no config.
 
 commands:
   survey [--porcelain] [--fetch] [name...]

@@ -111,16 +111,9 @@ _ck_stores() {
   done
 }
 
-# _ck_manage <profiles>: R12's two notes. No `manage` line (step 1 keeps
-# today's behaviour, and step 3 will refuse it), and a box managing paths
-# with no profile watching them: nothing would ever feed its banner.
+# _ck_manage <profiles>: a box managing paths with no profile watching
+# them: nothing would ever feed its banner (R12).
 _ck_manage() {
-  if ! sv_manage_declared; then
-    _ck_add note "manage     none declared, so this box manages both" \
-      "kinds as before; declare what it manages (\`manage repo\`," \
-      "\`manage path\`, one a line): a coming release requires it"
-    return 0
-  fi
   sv_manages path || return 0
   printf '%s\n' "$1" | awk '$2 == "placed" || $2 == "place" { f = 1 }
     END { exit !f }' && return 0

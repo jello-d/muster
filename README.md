@@ -52,8 +52,9 @@ And two KINDS of thing it manages, declared per box (R12):
 One kind a line. A box takes either or both: a server that only places
 config declares `manage path` and has no repo machinery at all. A verb,
 config line or profile of a kind the box does not declare is refused
-(exit 2, naming the missing line). With NO `manage` line muster behaves
-as before (both) and `check` notes it; a coming release will require it.
+(exit 2, naming the missing line). The lines are REQUIRED: no config,
+or a config with no `manage` line, is an error naming both, because what
+a box manages is the one thing muster will not guess.
 
 ## What it is not
 
@@ -696,9 +697,12 @@ records, never computed separately.
 
 ### Configuration
 
-Optional, at `$MUSTER_CONFIG` or `~/.config/muster/repos`. Without it,
-muster surveys every git repo one level under `~/src` (until `manage` is
-required: see What it does).
+REQUIRED, at `$MUSTER_CONFIG` or `~/.config/muster/repos`, if only for
+its `manage` lines (see What it does). With `manage repo` and no `repo`
+lines, muster surveys every git repo one level under `~/src`. The
+smallest config:
+
+    manage repo
 
     manage <repo|path>       what this box manages, one kind a line,
                              anywhere in the file (first reads best); the

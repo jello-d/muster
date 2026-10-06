@@ -197,6 +197,8 @@ concurrence is open. STEP 1 BUILT: `manage` enforced where declared,
 `placed`/`place` profiles, check's two notes, and merge-back and capture
 refusing a source outside a git work tree (found during T17: a payload
 source took the write, exit 0, and the next install would erase it).
+STEP 3 BUILT once both integrators reported every box emitting the
+lines: no config, or no `manage` line, is exit 2 naming both.
 
 WHY: muster does two things, and a box may want either or both. Measured
 on a scratch config holding only a `place` line: `check` listed an
