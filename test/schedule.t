@@ -23,7 +23,7 @@ assert "the stub is the systemctl in use" \
 C=$_T/cfg
 mkdir -p "$C"
 printf '%s\n' 'driver systemd' 'profile watch owed 30m' \
-  'profile sync catch-up 2h' > "$C/two"
+  'profile sync catch-up 2h' | h_cfg "$C/two"
 export MUSTER_CONFIG="$C/two"
 cli() {
   OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
@@ -116,7 +116,7 @@ assert "install again: nothing written" test -z "$(printf '%s\n' "$OUT" \
 # === drift, both ways =======================================================
 # The declared interval changed: the timer on disk is now wrong.
 printf '%s\n' 'driver systemd' 'profile watch owed 1h' \
-  'profile sync catch-up 2h' > "$C/two"
+  'profile sync catch-up 2h' | h_cfg "$C/two"
 cli schedule check
 expect_rc 1 "check after the interval changed"
 assert "check: the changed timer differs" \
@@ -139,7 +139,7 @@ cli schedule install
 assert "install re-enables it" enabled sync
 
 # A profile was dropped: its units are orphans, reported then removed.
-printf 'driver systemd\nprofile watch owed 1h\n' > "$C/two"
+printf 'driver systemd\nprofile watch owed 1h\n' | h_cfg "$C/two"
 cli schedule check
 expect_rc 1 "check with an orphaned profile"
 assert "check: the orphan service" has "$OUT" "orphan     muster-sync.service"
@@ -159,18 +159,18 @@ assert "install left the hand-written unit" test -f "$UNITS/muster-mine.timer"
 
 # === quoting what goes into a unit file =====================================
 mkdir -p "$_T/odd%dir"
-printf 'driver systemd\nprofile watch owed 1h\n' > "$_T/odd%dir/repos"
+printf 'driver systemd\nprofile watch owed 1h\n' | h_cfg "$_T/odd%dir/repos"
 MUSTER_CONFIG=$_T/odd%dir/repos cli schedule install
 expect_rc 0 "install with a % in the config path"
 assert "a % is doubled for systemd" \
   has "$(cat "$UNITS/muster-watch.service")" "odd%%dir/repos"
 mkdir -p "$_T/bad\"dir"
-printf 'driver systemd\nprofile watch owed 1h\n' > "$_T/bad\"dir/repos"
+printf 'driver systemd\nprofile watch owed 1h\n' | h_cfg "$_T/bad\"dir/repos"
 MUSTER_CONFIG=$_T/bad\"dir/repos cli schedule install
 expect_rc 2 "install refuses a value that would break the quoting"
 assert "the refusal names the value" has "$ERR" "cannot put"
 MUSTER_CONFIG=$C/two cli schedule install
-printf 'driver systemd\nprofile we@b owed 1h\n' > "$C/at"
+printf 'driver systemd\nprofile we@b owed 1h\n' | h_cfg "$C/at"
 MUSTER_CONFIG=$C/at cli schedule install
 expect_rc 2 "a profile name that would make a systemd template"
 
@@ -189,7 +189,7 @@ MUSTER_CONFIG=$C/two cli schedule install
 
 # === overlapping acting profiles are never put on a timer ===================
 printf '%s\n' 'driver systemd' 'profile a catch-up 1h' \
-  'profile b catch-up 2h one' > "$C/over"
+  'profile b catch-up 2h one' | h_cfg "$C/over"
 MUSTER_CONFIG=$C/over cli schedule install
 expect_rc 2 "install refuses overlapping acting profiles"
 assert "the refusal names them" has "$ERR" "a b one"
@@ -199,7 +199,7 @@ MUSTER_CONFIG=$C/two cli schedule install
 # The notifier as a CONFIG fact: install bakes it, and a check from a
 # shell with no MUSTER_NOTIFY computes the same unit (no false drift).
 printf 'driver systemd\nprofile watch owed 1h\nnotify %s\n' \
-  "$_T/stub/notify-me" > "$C/ntf"
+  "$_T/stub/notify-me" | h_cfg "$C/ntf"
 MUSTER_CONFIG=$C/ntf cli schedule install
 expect_rc 0 "install with the notifier declared in the config"
 assert "the config's notifier is baked, absolute" \
@@ -220,7 +220,7 @@ assert "a BARE name in the override is fine: its setter resolves it" \
 # A BARE name in the CONFIG resolves through each caller's PATH, and a
 # timer's PATH is not a login shell's: refused, and a fault in check.
 printf 'driver systemd\nprofile watch owed 1h\nnotify notify-me\n' \
-  > "$C/bare"
+| h_cfg "$C/bare"
 (unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/bare "$MUSTER" schedule install) \
   >"$_T/ck" 2>&1
 _rc=$?
@@ -235,7 +235,7 @@ assert "check names it" has "$(cat "$_T/ck")" "fault  notify     'notify-me'"
 MUSTER_NOTIFY=notify-me MUSTER_CONFIG=$C/bare cli schedule install
 assert "an override shields a bare name in the config" test "$RC" = 0
 printf 'driver systemd\nprofile watch owed 1h\nnotify %s\n' \
-  "$_T/no-such-notifier" > "$C/noexec"
+  "$_T/no-such-notifier" | h_cfg "$C/noexec"
 (unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/noexec "$MUSTER" check) \
   >"$_T/ck" 2>&1
 _rc=$?
@@ -243,11 +243,11 @@ assert "check: an absolute notifier that is not executable: fault" \
   test "$_rc" = 3
 assert "named" has "$(cat "$_T/ck")" "is not an executable file"
 for _bad in 'notify a b' 'notify'; do
-  printf 'driver systemd\nprofile watch owed 1h\n%s\n' "$_bad" > "$C/nbad"
+  printf 'driver systemd\nprofile watch owed 1h\n%s\n' "$_bad" | h_cfg "$C/nbad"
   MUSTER_CONFIG=$C/nbad cli schedule check
   expect_rc 2 "invalid notify line: $_bad"
 done
-printf 'notify a\nnotify b\n' > "$C/nbad"
+printf 'notify a\nnotify b\n' | h_cfg "$C/nbad"
 MUSTER_CONFIG=$C/nbad cli schedule check
 expect_rc 2 "two notify lines"
 MUSTER_CONFIG=$C/two cli schedule install

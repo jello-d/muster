@@ -165,7 +165,7 @@ upstream_moves raced
 # shellcheck source=SCRIPTDIR/../lib/catchup_lib
 . "$HERE/../lib/catchup_lib"
 g "$ROOT/raced" fetch
-SV_CONFIG=$_T/no-config SV_DO_FETCH='' CU_DRY=''
+SV_CONFIG=$MUSTER_CONFIG SV_DO_FETCH='' CU_DRY=''
 survey_record raced "$ROOT/raced" >/dev/null
 echo racing > "$ROOT/raced/untracked-now"
 snap raced
@@ -227,7 +227,7 @@ commit_file "$ROOT/carrier" test/conv.t "v2" seeded-v2
 g "$ROOT/carrier" push
 C=$_T/cfg
 mkdir -p "$C"
-printf 'artifact %s/_conv test/conv.t\n' "$ROOT/notes" > "$C/art"
+printf 'artifact %s/_conv test/conv.t\n' "$ROOT/notes" | h_cfg "$C/art"
 printf 'repo carrier\nrepo notes\n' >> "$C/art"
 _notes_was=$(head_of "$ROOT/notes")
 

@@ -31,6 +31,8 @@ export MUSTER_CONFIG="$_T/cfg"
 cat > "$MUSTER_CONFIG" <<CFG
 place $SRC $DST user-editable
 policy $DST/shared/ro.conf repo-owned
+manage repo
+manage path
 CFG
 
 pl() {   # placed --porcelain, into OUT / RC / ERR
@@ -438,7 +440,7 @@ chmod 755 "$RS/sub/tool"
 g "$TK" add -A; g "$TK" commit -m rootsrc
 ln -s "$RS" "$RD"
 RCFG=$_T/rcfg
-printf 'place %s %s user-editable\n' "$RS" "$RD" > "$RCFG"
+printf 'place %s %s user-editable\n' "$RS" "$RD" | h_cfg "$RCFG"
 # Its own state: under this config every baseline the main one placed is
 # under no declared root, i.e. unlayered (P14), which is not this test.
 rpl() { OUT=$(MUSTER_STATE_DIR=$_T/rstate MUSTER_CONFIG=$RCFG "$MUSTER" "$@" \
@@ -808,7 +810,7 @@ expect_rc 3 "check: a shadowed source is a FAULT"
 g "$TK" rm -q -r link/config/apps; g "$TK" commit -m unstray
 # The SAME source root twice: a layer is declared once (P14), refused.
 # (Two roots sharing a DESTINATION are layers: test/layers.t.)
-printf 'place %s/ %s app-owned\n' "$IA" "$DST/apps/code" > "$_T/dupcfg"
+printf 'place %s/ %s app-owned\n' "$IA" "$DST/apps/code" | h_cfg "$_T/dupcfg"
 printf 'place %s %s/x app-owned\n' "$IA" "$DST/apps/code" >> "$_T/dupcfg"
 OUT=$(MUSTER_CONFIG=$_T/dupcfg "$MUSTER" placed 2>&1); RC=$?
 expect_rc 2 "one source root on two place lines (one with a trailing /)"
@@ -834,16 +836,16 @@ assert "an unnamed path: untouched" test "$(cat "$DST/app/a.conf")" != dry
 g "$TK" checkout -- link/config
 act place
 printf 'place %s %s user-editable\npolicy /elsewhere/x repo-owned\n' \
-  "$SRC" "$DST" > "$_T/badcfg"
+  "$SRC" "$DST" | h_cfg "$_T/badcfg"
 OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?
 expect_rc 2 "a policy for a path under no root would never apply: refused"
 assert "and says so" has "$OUT" "under no place root"
 printf 'place %s %s user-editable\npolicy %s/a repo-owned\npolicy %s/a %s\n' \
-  "$SRC" "$DST" "$DST" "$DST" app-owned > "$_T/badcfg"
+  "$SRC" "$DST" "$DST" "$DST" app-owned | h_cfg "$_T/badcfg"
 OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?
 expect_rc 2 "two policy lines for one path: refused"
 for _bad in 'place a b c d' 'place a b nope' 'policy x nope' 'place a'; do
-  printf '%s\n' "$_bad" > "$_T/badcfg"
+  printf '%s\n' "$_bad" | h_cfg "$_T/badcfg"
   OUT=$(MUSTER_CONFIG=$_T/badcfg "$MUSTER" placed 2>&1); RC=$?
   expect_rc 2 "invalid config: $_bad"
 done

@@ -164,7 +164,7 @@ mkdir -p "$X"
 if [ -n "$CAN_LOCK" ]; then
   mkrepo sealed
   chmod 000 "$ROOT/sealed"
-  printf 'expect sealed unreadable\n' > "$X/sealed"
+  printf 'expect sealed unreadable\n' | h_cfg "$X/sealed"
   MUSTER_CONFIG=$X/sealed owed sealed
   expect sealed owed nothing
   expect sealed state unreadable
@@ -174,7 +174,7 @@ if [ -n "$CAN_LOCK" ]; then
   expect sealed owed unknown
   expect sealed state expect-mismatch
 fi
-printf 'expect nosuch unreadable\n' > "$X/wrong"
+printf 'expect nosuch unreadable\n' | h_cfg "$X/wrong"
 MUSTER_CONFIG=$X/wrong owed nosuch
 expect nosuch owed unknown
 assert "a suffixed terminal state raises no shell errors" test -z "$ERR"
@@ -186,7 +186,7 @@ mkrepo pkg
 git clone -q "$_T/origins/pkg.git" "$_T/deployed-pkg" 2>/dev/null
 upstream_moves pkg
 g "$ROOT/pkg" pull --ff-only
-printf 'deployed pkg %s\n' "$_T/deployed-pkg" > "$C/dep"
+printf 'deployed pkg %s\n' "$_T/deployed-pkg" | h_cfg "$C/dep"
 MUSTER_CONFIG=$C/dep owed pkg
 expect pkg owed redeploy
 
@@ -220,7 +220,7 @@ mkrepo notes
 commit_file "$ROOT/notes" _conv "$CANON_V1" v1
 g "$ROOT/notes" push
 CANON=$ROOT/notes/_conv
-printf 'artifact %s test/conv.t alt/conv.t\n' "$CANON" > "$C/art"
+printf 'artifact %s test/conv.t alt/conv.t\n' "$CANON" | h_cfg "$C/art"
 art() { MUSTER_CONFIG=$C/art owed "$@"; }
 
 mkrepo vmatch
@@ -290,7 +290,7 @@ expect vgone owed unknown
 commit_file "$ROOT/notes" _hook "# vendored hook" hook
 g "$ROOT/notes" push
 printf 'artifact %s .githooks/pre-commit requires %s %s\n' \
-  "$ROOT/notes/_hook" test/conv.t modules/tests/conv.t > "$C/req"
+  "$ROOT/notes/_hook" test/conv.t modules/tests/conv.t | h_cfg "$C/req"
 mkrepo ownhook
 commit_file "$ROOT/ownhook" .githooks/pre-commit "# my own hook" own
 g "$ROOT/ownhook" push
@@ -343,7 +343,7 @@ assert "one stale canonical, exactly one row needs attention" \
 assert "the warning still names the canonical" has "$ERR" "canonical $CANON"
 g "$ROOT/notes" pull --ff-only
 
-printf 'artifact %s/nope test/conv.t\n' "$ROOT/notes" > "$C/missing"
+printf 'artifact %s/nope test/conv.t\n' "$ROOT/notes" | h_cfg "$C/missing"
 MUSTER_CONFIG=$C/missing owed vmatch
 expect vmatch artifacts test/conv.t:unknown
 expect vmatch owed unknown
@@ -429,7 +429,7 @@ for _r in rs1 rs2 rsmix; do
   g "$ROOT/$_r" push
 done
 commit_file "$ROOT/rsmix" other "x" "unpushed work"
-printf 'artifact %s test/rc.t\n' "$ROOT/rnotes/_rc" > "$C/rs"
+printf 'artifact %s test/rc.t\n' "$ROOT/rnotes/_rc" | h_cfg "$C/rs"
 rso() { OUT=$(MUSTER_CONFIG=$C/rs "$MUSTER" owed "$@" rnotes rs1 rs2 rsmix \
   2>"$_T/err" </dev/null); RC=$?; }
 commit_file "$ROOT/rnotes" _rc "v2" "canonical, just now"
@@ -465,7 +465,7 @@ assert "porcelain keeps every record" \
   test "$(printf '%s\n' "$OUT" | grep -c 'owed=reseed ')" -ge 2
 # Through a stored run: report counts ONE item, not one per repo.
 printf 'artifact %s test/rc.t\nprofile rs owed 1h rnotes rs1 rs2\n' \
-  "$ROOT/rnotes/_rc" > "$C/rsp"
+  "$ROOT/rnotes/_rc" | h_cfg "$C/rsp"
 MUSTER_CONFIG=$C/rsp "$MUSTER" run rs >/dev/null 2>&1
 OUT=$(MUSTER_CONFIG=$C/rsp "$MUSTER" report --porcelain 2>/dev/null)
 assert "report: ONE item needs attention, not two" \
@@ -477,11 +477,11 @@ assert "sync: ONE item" has "$OUT" "vendored-copies: 2 repo(s) carry"
 assert "sync: no per-repo row" test -z "$(printf '%s\n' "$OUT" | grep '^rs1 ')"
 # The grace is the integrator's to set.
 printf 'artifact %s test/rc.t\nreseed-grace 3h\n' "$ROOT/rnotes/_rc" \
-  > "$C/rs"
+| h_cfg "$C/rs"
 rso --no-fetch
 expect_rc 0 "reseed-grace 3h: the two-hour-old change is not yet attention"
 for _bad in 'reseed-grace 3w' 'reseed-grace' 'reseed-grace 1h 2h'; do
-  printf '%s\n' "$_bad" > "$C/rsbad"
+  printf '%s\n' "$_bad" | h_cfg "$C/rsbad"
   OUT=$(MUSTER_CONFIG=$C/rsbad "$MUSTER" owed --no-fetch rs1 2>&1); RC=$?
   expect_rc 2 "a bad reseed-grace line: $_bad"
 done
@@ -505,10 +505,10 @@ expect_rc 0 "a fresh unpushed commit: not attention"
 assert "...but shown, with how long" has "$OUT" "unpushed "
 OUT=$("$MUSTER" owed --no-fetch pold 2>/dev/null); RC=$?
 expect_rc 1 "an unpushed commit two hours old: attention"
-printf 'push-grace 3h\n' > "$C/pg"
+printf 'push-grace 3h\n' | h_cfg "$C/pg"
 OUT=$(MUSTER_CONFIG=$C/pg "$MUSTER" owed --no-fetch pold 2>/dev/null); RC=$?
 expect_rc 0 "push-grace 3h: two hours is not yet attention"
-printf 'profile pp owed 1h pfresh\nprofile po owed 1h pold\n' > "$C/pp"
+printf 'profile pp owed 1h pfresh\nprofile po owed 1h pold\n' | h_cfg "$C/pp"
 MUSTER_CONFIG=$C/pp "$MUSTER" run pp >/dev/null 2>&1
 MUSTER_CONFIG=$C/pp "$MUSTER" run po >/dev/null 2>&1
 OUT=$(MUSTER_CONFIG=$C/pp "$MUSTER" report --porcelain 2>/dev/null)
@@ -517,7 +517,7 @@ assert "a stored run: the fresh push is not attention" \
 assert "a stored run: the old push is" \
   has "$(printf '%s\n' "$OUT" | grep '^profile=po ')" "attention=1 "
 for _bad in 'push-grace 2w' 'push-grace' 'push-grace 1h 2h'; do
-  printf '%s\n' "$_bad" > "$C/pgbad"
+  printf '%s\n' "$_bad" | h_cfg "$C/pgbad"
   OUT=$(MUSTER_CONFIG=$C/pgbad "$MUSTER" owed --no-fetch pold 2>&1); RC=$?
   expect_rc 2 "a bad push-grace line: $_bad"
 done

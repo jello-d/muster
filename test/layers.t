@@ -36,6 +36,8 @@ place $BASE $DST user-editable
 place $DESK $DST user-editable
 policy $DST/mux/mux.conf repo-owned
 capture $DST/app/data
+manage repo
+manage path
 CFG
 }
 cfg_both
@@ -126,6 +128,8 @@ g "$TK" rm -q "$BASE/sh/gone"; g "$TK" commit -m rm-gone
 cat > "$MUSTER_CONFIG" <<CFG
 place $BASE $DST user-editable
 capture $DST/app/data
+manage repo
+manage path
 CFG
 pl
 expv "$DST/wm/wm.conf" unlayered

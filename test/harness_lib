@@ -47,9 +47,17 @@ export PATH
 
 export HOME="$_T/home"
 export GIT_CONFIG_GLOBAL="$_T/gitconfig" GIT_CONFIG_NOSYSTEM=1
-export MUSTER_CONFIG="$_T/no-config" MUSTER_ROOT="$_T/src"
+# Every config declares what it manages (R12); the default declares both,
+# which is what a test that writes no config of its own exercises.
+export MUSTER_CONFIG="$_T/default-config" MUSTER_ROOT="$_T/src"
 unset XDG_CONFIG_HOME GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 mkdir -p "$HOME" "$_T/src" "$_T/origins" "$_T/other"
+printf 'manage repo\nmanage path\n' > "$MUSTER_CONFIG"
+# h_cfg <file>: write a config from stdin, declaring both kinds (R12).
+# APPENDED, which is legal anywhere in the file, so every line number a
+# test asserts on is the one it wrote. A fresh line first, so content
+# without a final newline is not glued to it (a blank line is legal).
+h_cfg() { { cat; printf '\nmanage repo\nmanage path\n'; } > "$1"; }
 cat > "$GIT_CONFIG_GLOBAL" <<'EOF'
 [user]
   name = muster test

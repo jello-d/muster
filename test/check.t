@@ -22,7 +22,7 @@ mkdir -p "$C"
 for _n in alpha beta gamma hush hwdp; do mkrepo "$_n"; done
 export MUSTER_CONFIG="$C/repos"
 ck() {   # <config lines...>: write them, run check
-  printf '%s\n' "$@" > "$MUSTER_CONFIG"
+  printf '%s\n' "$@" | h_cfg "$MUSTER_CONFIG"
   OUT=$("$MUSTER" check 2>"$_T/err" </dev/null)
   RC=$?
   ERR=$(cat "$_T/err")
@@ -218,7 +218,8 @@ for _f in /usr/bin/* /bin/*; do
   [ -e "$_T/nosysd/${_f##*/}" ] || [ -h "$_T/nosysd/${_f##*/}" ] \
     || ln -s "$_f" "$_T/nosysd/${_f##*/}"
 done
-printf '%s\n' 'driver systemd' 'profile a owed 1h alpha' > "$MUSTER_CONFIG"
+printf '%s\n' 'driver systemd' 'profile a owed 1h alpha' \
+  | h_cfg "$MUSTER_CONFIG"
 OUT=$(PATH=$_T/nosysd "$MUSTER" check 2>&1); RC=$?
 expect_rc 3 "systemd wanted with no systemctl: a fault, install cannot help"
 assert "named" has "$OUT" "fault  no-systemd"

@@ -185,7 +185,7 @@ expect three verdict moved
 # === the stamp is self-contained, odd paths included ========================
 mkdir -p "$_T/odd dir"
 git init -q "$_T/odd dir/spaced"
-printf 'repo spaced %s\n' "$_T/odd dir/spaced" > "$_T/odd.cfg"
+printf 'repo spaced %s\n' "$_T/odd dir/spaced" | h_cfg "$_T/odd.cfg"
 MUSTER_CONFIG=$_T/odd.cfg take s9 spaced
 chk s9
 expect spaced verdict holds

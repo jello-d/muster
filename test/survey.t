@@ -323,7 +323,7 @@ mkdir -p "$O"
 for _n in ours theirs bare; do git init -q "$O/$_n"; done
 g "$O/ours" remote add origin "git@github.com:jello-d/ours.git"
 g "$O/theirs" remote add origin "https://github.com/someone/theirs"
-printf 'origin *jello-d/*\n' > "$_T/origin.cfg"
+printf 'origin *jello-d/*\n' | h_cfg "$_T/origin.cfg"
 MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin.cfg survey
 assert "origin: ours is discovered" test -n "$(rec ours)"
 assert "origin: a third-party clone is not" test -z "$(rec theirs)"
@@ -337,16 +337,16 @@ if [ -n "$CAN_LOCK" ]; then
   chmod 755 "$O/sealed"
   rmdir "$O/sealed"
 fi
-printf 'origin *jello-d/*\norigin *someone/*\n' > "$_T/origin2.cfg"
+printf 'origin *jello-d/*\norigin *someone/*\n' | h_cfg "$_T/origin2.cfg"
 MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin2.cfg survey
 assert "origin: any of several globs" test -n "$(rec theirs)"
 MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin.cfg survey theirs
 assert "origin: a NAMED repo is surveyed whatever its origin" \
   test -n "$(rec theirs)"
-printf 'origin\n' > "$_T/origin3.cfg"
+printf 'origin\n' | h_cfg "$_T/origin3.cfg"
 MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin3.cfg survey
 expect_rc 2 "origin with no glob"
-printf 'origin a b\n' > "$_T/origin4.cfg"
+printf 'origin a b\n' | h_cfg "$_T/origin4.cfg"
 MUSTER_ROOT=$O MUSTER_CONFIG=$_T/origin4.cfg survey
 expect_rc 2 "origin with two words"
 
@@ -417,6 +417,8 @@ repo zeta
 repo tilde ~/elsewhere/tilde
 repo spaced $_T/with space/spaced
 root $D
+manage repo
+manage path
 CFG
 MUSTER_ROOT='' MUSTER_CONFIG=$C/repos survey
 assert "config: the declared set, in declared order" \
@@ -437,22 +439,24 @@ assert "config: a named repo resolves through the config" \
   test "$(printf '%s\n' "$OUT" | wc -l)" -eq 1
 expect tilde path "$HOME/elsewhere/tilde"
 
-printf 'repo zeta\nrepos alpha\n' > "$C/typo"
+printf 'repo zeta\nrepos alpha\n' | h_cfg "$C/typo"
 MUSTER_CONFIG=$C/typo survey
 expect_rc 2 "an unknown directive"
 assert "an unknown directive names its line" has "$ERR" typo:2:
 
-printf 'deployed zeta\n' > "$C/short"
+printf 'deployed zeta\n' | h_cfg "$C/short"
 MUSTER_CONFIG=$C/short survey
 expect_rc 2 "deployed without a path"
 
-printf 'repo alpha' > "$C/nonl"
+# The manage lines FIRST here, so the last line is still the unterminated
+# one under test.
+printf 'manage repo\nmanage path\nrepo alpha' > "$C/nonl"
 MUSTER_ROOT=$D MUSTER_CONFIG=$C/nonl survey
 assert "a last line with no newline is still read" \
   test -n "$(rec alpha)"
 
 if [ -n "$CAN_LOCK" ]; then
-  printf 'repo alpha\n' > "$C/locked"
+  printf 'repo alpha\n' | h_cfg "$C/locked"
   chmod 000 "$C/locked"
   MUSTER_CONFIG=$C/locked survey
   expect_rc 2 "an unreadable config"
@@ -461,7 +465,7 @@ fi
 
 # The default config path, under HOME, is read when MUSTER_CONFIG is unset.
 mkdir -p "$HOME/.config/muster"
-printf 'repo mid\n' > "$HOME/.config/muster/repos"
+printf 'repo mid\n' | h_cfg "$HOME/.config/muster/repos"
 OUT=$(unset MUSTER_CONFIG; MUSTER_ROOT=$D "$MUSTER" survey --porcelain)
 assert "the default config path is honoured" \
   test "$(printf '%s\n' "$OUT" | awk '{print $1}')" = name=mid
@@ -474,7 +478,7 @@ mkdir -p "$X"
 if [ -n "$CAN_LOCK" ]; then
   mkrepo sealed
   chmod 000 "$ROOT/sealed"
-  printf 'expect sealed unreadable\n' > "$X/sealed"
+  printf 'expect sealed unreadable\n' | h_cfg "$X/sealed"
   MUSTER_CONFIG=$X/sealed survey sealed
   expect sealed state unreadable
   expect sealed expect unreadable
@@ -488,21 +492,21 @@ if [ -n "$CAN_LOCK" ]; then
   expect sealed state expect-mismatch
   expect_rc 1 "a declared-unreadable repo that is readable"
 fi
-printf 'expect ghost absent\n' > "$X/ghost"
+printf 'expect ghost absent\n' | h_cfg "$X/ghost"
 MUSTER_CONFIG=$X/ghost survey ghost
 expect ghost state absent
 expect_rc 0 "an absent repo declared absent"
-printf 'expect clean absent\n' > "$X/present"
+printf 'expect clean absent\n' | h_cfg "$X/present"
 MUSTER_CONFIG=$X/present survey clean
 expect clean state expect-mismatch
 expect_rc 1 "declared absent, but present"
-printf 'expect nosuch unreadable\n' > "$X/wrong"
+printf 'expect nosuch unreadable\n' | h_cfg "$X/wrong"
 MUSTER_CONFIG=$X/wrong survey nosuch
 expect nosuch state absent,expect-mismatch
-printf 'expect clean dirty\n' > "$X/bad"
+printf 'expect clean dirty\n' | h_cfg "$X/bad"
 MUSTER_CONFIG=$X/bad survey clean
 expect_rc 2 "expect accepts only a closed list of states"
-printf 'expect clean\n' > "$X/short"
+printf 'expect clean\n' | h_cfg "$X/short"
 MUSTER_CONFIG=$X/short survey clean
 expect_rc 2 "expect without a state"
 survey clean
@@ -513,7 +517,7 @@ mkrepo pkg
 P=$_T/deployed
 mkdir -p "$P"
 git clone -q "$_T/origins/pkg.git" "$P/pkg" 2>/dev/null
-printf 'deployed pkg %s/pkg\n' "$P" > "$C/dep"
+printf 'deployed pkg %s/pkg\n' "$P" | h_cfg "$C/dep"
 MUSTER_CONFIG=$C/dep survey pkg
 expect pkg state ok
 assert "deployed: matches origin, reported as its sha" \
@@ -538,20 +542,20 @@ g "$ROOT/pkg" commit -am dev
 MUSTER_CONFIG=$C/dep survey pkg
 expect pkg state ahead
 
-printf 'deployed pkg %s/gone\n' "$P" > "$C/dep2"
+printf 'deployed pkg %s/gone\n' "$P" | h_cfg "$C/dep2"
 MUSTER_CONFIG=$C/dep2 survey pkg
 expect pkg deployed absent
 expect pkg state ahead,deployed-absent
 
 mkdir "$P/notrepo"
-printf 'deployed pkg %s/notrepo\n' "$P" > "$C/dep3"
+printf 'deployed pkg %s/notrepo\n' "$P" | h_cfg "$C/dep3"
 MUSTER_CONFIG=$C/dep3 survey pkg
 expect pkg deployed not-a-repo
 
 # No upstream: the deployed clone is compared with the dev HEAD.
 mkd solo
 git clone -q "$D/solo" "$P/solo" 2>/dev/null
-printf 'deployed solo %s/solo\n' "$P" > "$C/dep4"
+printf 'deployed solo %s/solo\n' "$P" | h_cfg "$C/dep4"
 MUSTER_ROOT=$D MUSTER_CONFIG=$C/dep4 survey solo
 expect solo state no-upstream
 echo more >> "$D/solo/f"

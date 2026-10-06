@@ -31,7 +31,7 @@ echo 'wip' >> "$ROOT/dirtyahead/f"
 mkrepo diverged; upstream_moves diverged
 commit_file "$ROOT/diverged" mine "mine" "diverged local commit"
 mkrepo clean
-printf 'profile p owed 1h\n' > "$MUSTER_CONFIG"
+printf 'profile p owed 1h\n' | h_cfg "$MUSTER_CONFIG"
 _o1=$(origin_head ahead1) _o2=$(origin_head ahead2)
 _od=$(origin_head diverged)
 

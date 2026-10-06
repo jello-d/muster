@@ -34,7 +34,7 @@ echo 'in progress' >> "$ROOT/dirty/f"
 mkrepo gone
 commit_file "$ROOT/gone" mine "unpushed, behind a dead remote" local
 g "$ROOT/gone" remote set-url origin "$_T/origins/no-such.git"
-printf 'profile p owed 1h\n' > "$MUSTER_CONFIG"
+printf 'profile p owed 1h\n' | h_cfg "$MUSTER_CONFIG"
 _b_was=$(head_of "$ROOT/behind")
 _d_was=$(head_of "$ROOT/diverged")
 _a_origin=$(origin_head ahead)
@@ -115,7 +115,7 @@ g "$TK" add -A
 g "$TK" commit -m seed
 mkdir -p "$HOME/conf"
 printf 'profile p owed 1h\nrepo clean\nplace %s %s user-editable\n' \
-  "$TK/conf" "$HOME/conf" > "$MUSTER_CONFIG"
+  "$TK/conf" "$HOME/conf" | h_cfg "$MUSTER_CONFIG"
 rs
 expect_rc 0 "config placed, nothing left"
 assert "config: the new files were placed" \

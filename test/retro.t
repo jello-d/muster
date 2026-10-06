@@ -15,7 +15,7 @@ export MUSTER_STATE_DIR="$_T/state"
 export MUSTER_CONFIG="$_T/cfg"
 S=$_T/state
 R=$S/retro
-: > "$MUSTER_CONFIG"
+h_cfg "$MUSTER_CONFIG" </dev/null
 cli() {
   OUT=$("$MUSTER" "$@" 2>"$_T/err" </dev/null)
   RC=$?
@@ -72,7 +72,7 @@ assert "WHO held it is tallied, for the review" \
 
 # === a run: the profile is the origin, and the run is tallied ==============
 upstream_moves pulled
-printf 'profile fl sync 15m pulled\n' > "$MUSTER_CONFIG"
+printf 'profile fl sync 15m pulled\n' | h_cfg "$MUSTER_CONFIG"
 cli run fl
 assert "a run's pull carries the PROFILE as its origin" \
   has "$(evk pulled pulled)" "origin=fl"
@@ -88,7 +88,7 @@ printf 'x\n' > "$ROOT/ahead/a"
 g "$ROOT/ahead" add a
 GIT_COMMITTER_DATE="@$(( $(date +%s) - 7200 )) +0000" \
   git -C "$ROOT/ahead" commit -q -m "unpushed, two hours ago"
-printf 'profile w owed 1h ahead\n' > "$MUSTER_CONFIG"
+printf 'profile w owed 1h ahead\n' | h_cfg "$MUSTER_CONFIG"
 rm -f "$R/open"
 : > "$R/open"
 cli run w
@@ -113,7 +113,7 @@ assert "and it is no longer open" lacks "$(cat "$R/open")" "w ahead "
 # === a run that could not run: an unusual event, episodes untouched ========
 # No selection and no root: the verb itself cannot run (exit 2). A NAMED
 # repo under a missing root is a valid run that reads it `unknown`.
-printf 'profile nr owed 1h\n' > "$MUSTER_CONFIG"
+printf 'profile nr owed 1h\n' | h_cfg "$MUSTER_CONFIG"
 cli run nr
 assert "nr has an episode open (a repo behind needs a pull)" \
   has "$(cat "$R/open")" "nr busy "
@@ -124,7 +124,7 @@ assert "a run that could not run is unusual" \
   has "$(evk could-not-run nr)" "class=unusual kind=could-not-run"
 assert "it touched no episode" cmp -s "$R/open" "$_T/open.before"
 assert "and is tallied as failed" has "$(tl)" "run:failed nr 1"
-printf 'profile w owed 1h ahead\n' > "$MUSTER_CONFIG"
+printf 'profile w owed 1h ahead\n' | h_cfg "$MUSTER_CONFIG"
 
 # === push: pushed, and a refused push ======================================
 mkrepo pu
@@ -145,7 +145,7 @@ mkdir -p "$CT/c" "$HOME/cd"
 echo one > "$CT/c/a.conf"
 git init -q "$CT"; g "$CT" add -A; g "$CT" commit -m seed
 printf 'profile w owed 1h ahead\nplace %s %s user-editable\n' \
-  "$CT/c" "$HOME/cd" > "$MUSTER_CONFIG"
+  "$CT/c" "$HOME/cd" | h_cfg "$MUSTER_CONFIG"
 cli place
 echo 'live edit' > "$HOME/cd/a.conf"
 cli run w

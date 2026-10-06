@@ -45,7 +45,7 @@ assert "default profile: driven by nothing" \
 assert "no run yet, on demand: on-demand" \
   test "$(pfield default status)" = on-demand
 # Declaring only a driver gives the default profile a cadence.
-printf 'driver systemd\n' > "$C/sys"
+printf 'driver systemd\n' | h_cfg "$C/sys"
 MUSTER_CONFIG=$C/sys cli report --porcelain
 assert "driver systemd alone: the default runs hourly" \
   test "$(pfield default every)" = 1h
@@ -109,7 +109,7 @@ assert "a run that could not run: failed" \
 assert "failed: exit 2 recorded" test "$(meta default exit)" = 2
 
 # === declared profiles ======================================================
-printf 'profile watch owed 30m\nprofile keep catch-up 2h\n' > "$C/two"
+printf 'profile watch owed 30m\nprofile keep catch-up 2h\n' | h_cfg "$C/two"
 printf 'profile look survey 1d\n' >> "$C/two"
 MUSTER_CONFIG=$C/two cli report --porcelain
 assert "declared: three profiles, and no default" \
@@ -118,7 +118,7 @@ assert "declared: watch every 30m" test "$(pfield watch every)" = 30m
 assert "declared: the default is gone" test -z "$(pfield default verb)"
 # A config whose LAST line is not a profile: the AND-list trap that once
 # made every profile vanish under set -e.
-printf 'profile tail owed 1h\nroot %s\n' "$ROOT" > "$C/tail"
+printf 'profile tail owed 1h\nroot %s\n' "$ROOT" | h_cfg "$C/tail"
 MUSTER_CONFIG=$C/tail cli run tail
 assert "profiles are found when the last line is not one" \
   test -s "$S/tail/latest.records"
@@ -129,7 +129,7 @@ assert "an undeclared profile is named" has "$ERR" "no profile 'default'"
 for _bad in 'profile x frobnicate 1h' 'profile x owed 1w' 'profile x owed' \
     'profile x owed 1h bad/sel' 'profile a/b owed 1h' 'profile .x owed 1h' \
     'profile x owed h' 'profile x owed 10'; do
-  printf '%s\n' "$_bad" > "$C/bad"
+  printf '%s\n' "$_bad" | h_cfg "$C/bad"
   MUSTER_CONFIG=$C/bad cli report
   expect_rc 2 "a bad profile line: $_bad"
 done
@@ -160,7 +160,7 @@ mkrepo selB
 upstream_moves selA
 upstream_moves selB
 printf 'profile only catch-up 2h selA\nprofile pat owed 1h /sel.*/\n' \
-  > "$C/sel"
+| h_cfg "$C/sel"
 MUSTER_CONFIG=$C/sel cli run only
 assert "a selected repo is acted on" \
   test "$(git -C "$ROOT/selA" rev-parse HEAD)" \
@@ -177,7 +177,7 @@ assert "a pattern selects by name" \
 g "$ROOT/selB" pull --ff-only
 
 # An empty selection NEVER falls back to the whole set.
-printf 'profile ghost catch-up 1h /nothing-here.*/\n' > "$C/ghost"
+printf 'profile ghost catch-up 1h /nothing-here.*/\n' | h_cfg "$C/ghost"
 mkrepo bystander
 upstream_moves bystander
 _by=$(git -C "$ROOT/bystander" rev-parse HEAD)
@@ -192,7 +192,7 @@ g "$ROOT/bystander" pull --ff-only
 
 # Overlapping ACTING profiles: run refuses, and the refusal is stored.
 printf 'profile p1 catch-up 1h selA\nprofile p2 catch-up 2h /selA|selB/\n' \
-  > "$C/over"
+| h_cfg "$C/over"
 upstream_moves selA
 _sa=$(git -C "$ROOT/selA" rev-parse HEAD)
 MUSTER_CONFIG=$C/over cli run p1
@@ -202,13 +202,13 @@ assert "the overlap refusal touched nothing" \
 assert "the refusal names the overlap" \
   has "$(cat "$S/p1/latest.err")" "p1 p2 selA"
 printf 'profile p1 catch-up 1h selA\nprofile p2 owed 2h /selA|selB/\n' \
-  > "$C/over"
+| h_cfg "$C/over"
 MUSTER_CONFIG=$C/over cli run p1
 expect_rc 0 "overlapping an OBSERVE-only profile is fine"
 g "$ROOT/selA" pull --ff-only 2>/dev/null
 
 # === pruning ================================================================
-printf 'profile p owed 1h\n' > "$C/p"
+printf 'profile p owed 1h\n' | h_cfg "$C/p"
 for _i in 1 2 3 4; do MUSTER_CONFIG=$C/p MUSTER_KEEP=2 cli run p; done
 assert "pruned to MUSTER_KEEP" test "$(nhist p)" = 2
 _newest=$(find "$S/p/history" -name '*.meta' | sort -n | tail -n 1)
@@ -228,17 +228,17 @@ assert "by age: one an hour old is kept (default 7 days)" \
   test -e "$_hp/$_hour-1.meta"
 assert "by age: all three files of a pruned run go" \
   test ! -e "$_hp/1000-1.records" -a ! -e "$_hp/1000-1.err"
-printf 'profile p owed 1h\nkeep 30m\n' > "$C/pk"
+printf 'profile p owed 1h\nkeep 30m\n' | h_cfg "$C/pk"
 MUSTER_CONFIG=$C/pk cli run p
 assert "keep 30m: the hour-old run is pruned too" \
   test ! -e "$_hp/$_hour-1.meta"
 assert "keep 30m: this run is kept" test "$(nhist p)" -ge 1
 for _bad in 'keep 1w' 'keep' 'keep 7d 8d'; do
-  printf 'profile p owed 1h\n%s\n' "$_bad" > "$C/pb"
+  printf 'profile p owed 1h\n%s\n' "$_bad" | h_cfg "$C/pb"
   MUSTER_CONFIG=$C/pb cli report
   expect_rc 2 "a bad keep line: $_bad"
 done
-printf 'keep 7d\nkeep 8d\n' > "$C/pb"
+printf 'keep 7d\nkeep 8d\n' | h_cfg "$C/pb"
 MUSTER_CONFIG=$C/pb cli report
 expect_rc 2 "two keep lines"
 
@@ -265,7 +265,7 @@ assert "stale lock: released after" test ! -e "$S/p/lock"
 # === one muster run at a time on a box ======================================
 # Found live: two profiles' timers fired in the same second, and a
 # catch-up pulled the canonical mid-way through an observer's run.
-printf 'profile solo owed 1h\nrepo one\n' > "$C/solo"
+printf 'profile solo owed 1h\nrepo one\n' | h_cfg "$C/solo"
 BOX=$S/.box-lock
 sleep 60 &
 _holder=$!
@@ -310,7 +310,7 @@ case \$1 in flag|clear) ;; *) exit 9 ;; esac
 printf '%s\n' "\$*" >> '$N_LOG'
 NOTIFIER
 chmod +x "$_T/notifier"
-printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' > "$C/n"
+printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' | h_cfg "$C/n"
 mkrepo nmoved
 nrun() { MUSTER_CONFIG=$C/n MUSTER_NOTIFY=$_T/notifier cli run n; }
 # nlast: the last PROFILE notification. Every run also flags or clears
@@ -337,7 +337,7 @@ assert "a run that could not run is flagged" \
   starts "$(nlast)" "flag muster-p muster p could not run (exit 2)"
 # The notifier declared in the CONFIG, no environment: still reached.
 printf 'profile n owed 1h\nrepo one\nrepo nmoved\nnotify %s\n' \
-  "$_T/notifier" > "$C/ncfg"
+  "$_T/notifier" | h_cfg "$C/ncfg"
 (unset MUSTER_NOTIFY; MUSTER_CONFIG=$C/ncfg "$MUSTER" run n) >/dev/null 2>&1
 assert "a config-declared notifier gets the run's state" \
   test "$(nlast)" = "clear muster-n"
@@ -358,7 +358,7 @@ assert "a failing notifier is reported" has "$ERR" "notifier"
 # stayed red, with nothing saying it was out of date.
 mkrepo mv1
 mkrepo mv2
-printf 'profile mv owed 1h\nrepo mv1\nrepo mv2\n' > "$C/mv"
+printf 'profile mv owed 1h\nrepo mv1\nrepo mv2\n' | h_cfg "$C/mv"
 mvp() { MUSTER_CONFIG=$C/mv cli "$@"; }
 mvp run mv
 assert "a run stores the refs it left" test -s "$S/mv/latest.heads"
@@ -418,7 +418,7 @@ git init -q "$CTK"
 g "$CTK" add -A
 g "$CTK" commit -m seed
 printf 'profile c owed 1h\nrepo one\nplace %s %s user-editable\n' \
-  "$CTK/conf" "$HOME/cdst" > "$C/c"
+  "$CTK/conf" "$HOME/cdst" | h_cfg "$C/c"
 crun() { MUSTER_CONFIG=$C/c MUSTER_NOTIFY=$_T/notifier cli run c; }
 crep() { MUSTER_CONFIG=$C/c cli report "$@"; }
 MUSTER_CONFIG=$C/c "$MUSTER" place >/dev/null 2>&1
@@ -470,7 +470,7 @@ crun
 assert "drift only: the store stays empty" test ! -s "$S/config.faults"
 assert "drift only: the banner stays clear" \
   test "$(nconfig)" = "clear muster.config"
-printf 'profile c owed 1h\nrepo one\n' > "$C/cn"
+printf 'profile c owed 1h\nrepo one\n' | h_cfg "$C/cn"
 MUSTER_CONFIG=$C/cn MUSTER_NOTIFY=$_T/notifier cli run c
 assert "no placement declared: no store at all" test ! -e "$S/config.faults"
 MUSTER_CONFIG=$C/cn cli report --porcelain
@@ -483,8 +483,8 @@ assert "no placement declared: no config record" lacks "$OUT" "config="
 # key that stays broken is not hidden. Both verbs that fetch obey it.
 mkrepo nunreach
 g "$ROOT/nunreach" remote set-url origin "$_T/origins/no-such.git"
-printf 'profile u owed 1h\nrepo nunreach\n' > "$C/u"
-printf 'profile uc catch-up 1h\nrepo nunreach\n' > "$C/uc"
+printf 'profile u owed 1h\nrepo nunreach\n' | h_cfg "$C/u"
+printf 'profile uc catch-up 1h\nrepo nunreach\n' | h_cfg "$C/uc"
 urun() { MUSTER_CONFIG=$C/$1 MUSTER_NOTIFY=$_T/notifier cli run "$1"; }
 urun u
 assert "unreachable, fetched recently: the row is still reported" \

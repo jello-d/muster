@@ -15,7 +15,7 @@ H_NAME=sync
 export MUSTER_STATE_DIR="$_T/state"
 export MUSTER_CONFIG="$_T/cfg"
 S=$_T/state
-: > "$MUSTER_CONFIG"
+h_cfg "$MUSTER_CONFIG" </dev/null
 sy() {   # [args...]: sync --porcelain, into OUT / ERR / RC
   OUT=$("$MUSTER" sync --porcelain "$@" 2>"$_T/err" </dev/null)
   RC=$?
@@ -222,7 +222,7 @@ cp "$ROOT/canon/art.t" "$ROOT/user/t/art.t"
 g "$ROOT/user" add t/art.t
 g "$ROOT/user" commit -m vendored
 g "$ROOT/user" push
-printf 'artifact %s t/art.t\n' "$ROOT/canon/art.t" > "$MUSTER_CONFIG"
+printf 'artifact %s t/art.t\n' "$ROOT/canon/art.t" | h_cfg "$MUSTER_CONFIG"
 upstream_moves canon
 ( cd "$ROOT/canon" && exec sleep 60 ) &
 _sleeper=$!
@@ -236,12 +236,12 @@ kill "$_sleeper" 2>/dev/null
 wait "$_sleeper" 2>/dev/null
 sy canon user
 expect canon result ok
-: > "$MUSTER_CONFIG"
+h_cfg "$MUSTER_CONFIG" </dev/null
 
 # === hold: observed by every verb, moved by none ============================
 mkrepo held; upstream_moves held
 _h_was=$(head_of "$ROOT/held")
-printf 'hold held\n' > "$MUSTER_CONFIG"
+printf 'hold held\n' | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" owed --porcelain held 2>/dev/null); RC=$?
 expect held owed held
 expect_rc 0 "owed: a held repo alone is not attention"
@@ -261,7 +261,7 @@ assert "resolve: a held repo is not on the list" \
 # Held hides no problem: unpushed work is still owed a push...
 mkrepo heldahead
 commit_file "$ROOT/heldahead" mine "x" "unpushed while held"
-printf 'hold /held.*/\n' > "$MUSTER_CONFIG"
+printf 'hold /held.*/\n' | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" owed --porcelain heldahead 2>/dev/null)
 expect heldahead owed push
 # ...and a /regex/ hold matches in full, or not at all.
@@ -271,18 +271,18 @@ expect unheld owed pull
 OUT=$("$MUSTER" check 2>&1)
 assert "check: a hold that matches nothing is a note" lacks "$OUT" \
   "hold       /held.*/"
-printf 'hold no-such-repo\n' > "$MUSTER_CONFIG"
+printf 'hold no-such-repo\n' | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" check 2>&1)
 assert "check: a literal hold naming no repo here is a note" \
   has "$OUT" "note   hold       no-such-repo matches no repo here"
-printf 'hold bad/name\n' > "$MUSTER_CONFIG"
+printf 'hold bad/name\n' | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" owed --porcelain held 2>&1); RC=$?
 expect_rc 2 "an invalid hold selector: the config is refused"
-: > "$MUSTER_CONFIG"
+h_cfg "$MUSTER_CONFIG" </dev/null
 
 # === sync as a profile verb ==================================================
 mkrepo prof; upstream_moves prof
-printf 'profile s sync 15m prof\n' > "$MUSTER_CONFIG"
+printf 'profile s sync 15m prof\n' | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" run s 2>&1); RC=$?
 expect_rc 0 "run s: a sync profile"
 assert "the profile pulled" \
@@ -290,11 +290,11 @@ assert "the profile pulled" \
 assert "and stored its records" has "$(cat "$S/s/latest.records")" \
   "name=prof action=pull result=ok"
 printf 'profile s sync 15m prof\nprofile c catch-up 15m prof\n' \
-  > "$MUSTER_CONFIG"
+  | h_cfg "$MUSTER_CONFIG"
 OUT=$("$MUSTER" check 2>&1); RC=$?
 assert "sync ACTS: overlapping a catch-up profile is a fault" \
   has "$OUT" "overlap    s and c both act on prof"
-: > "$MUSTER_CONFIG"
+h_cfg "$MUSTER_CONFIG" </dev/null
 
 sy --bogus
 expect_rc 2 "an unknown option"
