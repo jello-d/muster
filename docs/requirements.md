@@ -28,6 +28,11 @@ The shape is charon's, and the contract is charon's, restated:
 > delete muster's defaults and tackup's declarations still fully determine
 > behaviour.
 
+AMENDED BY R12 (proposed 2026-10-05, agreed with the user): the one thing
+muster will not default is WHAT IT MANAGES. With no config, or a config
+with no `manage` line, it refuses and says which lines to add. Every
+other default stands.
+
 ## What it is NOT
 
 Held here so the boundary is visible rather than assumed, and because two
@@ -182,6 +187,73 @@ session landed work while it ran. Both times the result was green and both
 times it described a tree that no longer existed. Nothing detected this;
 it was noticed by hand. Detecting invalidation is tractable, and it is the
 honest half of the release problem muster is otherwise staying out of.
+
+### R12. What a box manages is DECLARED, never inferred (PROPOSED)
+
+PROPOSED 2026-10-05. The names and both decisions below were agreed with
+the user; the integrator has not yet concurred (T17 in its requests
+file).
+
+WHY: muster does two things, and a box may want either or both. Measured
+on a scratch config holding only a `place` line: `check` listed an
+implicit `default` profile over "all (0)" repos, and `muster run
+default` there could not run, which the next `check` reported as a
+FAULT. A box that only places could never clear its banner. Discovery
+still defaulted to `~/src`, so a box that merely has clones there gets
+surveyed whether anyone asked or not. The repo half's defaults leak onto
+boxes that never declared it. Splitting muster in two was considered and
+rejected: run, report, schedule, check, retro, the notifier, the state
+dir and the box lock would all exist twice.
+
+THE TWO KINDS, by the unit acted on:
+
+- `repo`: a git repository as a whole (refs, remote, working tree):
+  behind, diverged, dirty, unpushed, in use, its vendored copies and its
+  deployed clone.
+- `path`: a placed file at a path, by content and mode against a
+  baseline; it needs no git (a source root outside git works). Named
+  `path` rather than `file` because directories are already partly in
+  scope (capture dirs, directory links, linked dest roots) and may be
+  more so.
+
+MUST BE TRUE:
+
+- One kind per line, `manage repo` and `manage path`. Both on one line
+  would read as "the repo path", which `repo <name> [<path>]` already
+  means. A repeated line or an unknown kind is a config error.
+- NO `manage` LINE IS A CONFIG ERROR, and so is NO CONFIG: exit 2 for
+  every verb except `help`, naming the lines to add. Nothing is inferred
+  from the other lines present, which would be a second classification
+  of the same fact.
+- Without `manage repo`: no discovery and no implicit `default` profile;
+  `survey`, `owed`, `catch-up`, `sync`, `push` and `stamp` exit 2 naming
+  the missing line; `root`, `origin`, `repo`, `deployed`, `artifact`,
+  `expect`, `hold`, `push-grace` and `reseed-grace` are config errors.
+- Without `manage path`: `placed`, `place`, `merge-back`, `capture`,
+  `diff`, `where`, `displaced` and `retire` exit 2 naming the missing
+  line; `place`, `policy` and `capture` lines are config errors.
+- Shared, serving whatever is declared: `run`, `report`, `schedule`,
+  `check`, `retro`, `resolve` (each step only for a declared kind), and
+  `notify`, `driver`, `keep`.
+- A PROFILE'S VERB DECIDES WHAT IT COVERS. Profiles also take `placed`
+  (observe: store placement faults, feed the banner) and `place` (act:
+  place drift). A path profile covers every placed path, so a repo
+  selector on one is a config error; two acting `place` profiles always
+  overlap and are refused, as overlapping repo profiles are. No profile
+  ever merges back or captures, as no profile ever pushes.
+- `check` notes `manage path` with no profile observing placement, the
+  same shape as the existing "no driver declared" note: nothing would
+  ever feed the banner.
+
+PHASING (the change breaks every config in use, and the frozen
+placement format promised additive changes only, hence T17):
+
+1. muster accepts `manage` and enforces it where present; a config
+   WITHOUT it keeps today's behaviour (repo always, path if `place`
+   lines exist), and `check` notes the missing lines.
+2. The integrators (tackup, drydock) emit the lines on every box, and
+   each box's `check` reads without the note.
+3. muster makes absence fatal.
 
 ## Possible shape, wholly non-binding
 
