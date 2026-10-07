@@ -124,6 +124,16 @@ printf 'manage repo\n%s\n' "$PLACE" > "$MUSTER_CONFIG"
 cli survey one
 expect_rc 2 "repo only: a place line is a config error"
 assert "and names it" has "$ERR" "is a path line"
+# A profile's kind is its VERB's: a placed or place profile is a path
+# line, refused on a repo-only box like `place` itself (the integrator's
+# own path-only fixture broke on exactly this arm, 2026-10-07).
+for _p in "profile c placed 1h" "profile c place 1h"; do
+  printf 'manage repo\n%s\n' "$_p" > "$MUSTER_CONFIG"
+  cli survey one
+  expect_rc 2 "repo only: '$_p' is a config error"
+  assert "'$_p': named as a path line" has "$ERR" "cfg:2: 'profile c' is a path"
+done
+printf 'manage repo\n' > "$MUSTER_CONFIG"
 cli check
 assert "repo only: no placement note" lacks "$OUT" "no profile runs placed"
 
