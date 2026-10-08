@@ -181,6 +181,10 @@ commands:
          and declined, what needed you and for how long, and the unusual
          events, kept for a rolling year. `muster retro help` lists its
          commands (show, events, tally, status, done)
+  flag-holds <flag>
+         is a flag muster raised still needed? For the notifier's
+         recheck: 0 still needed, 1 resolved, 2 cannot say. Reads the
+         config and the stored runs only
   help   this text
 
 exit: 0 every repo is ok (owed, catch-up: owes nothing after), 1
@@ -213,6 +217,7 @@ case ${1:-} in
   where) shift; where_main "$@" ;;
   retire) shift; retire_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
+  flag-holds) shift; flag_holds_main "$@" ;;
   retro) shift; retro_main "$@" ;;
   help|-h|--help) usage ;;
   '') usage >&2; exit 2 ;;

@@ -340,10 +340,136 @@ _rn_notify() {
     set -- "$1" clear
   fi
   _n_p=$1; _n_verb=$2; shift 2
-  "$_n_cmd" "$_n_verb" "muster-$_n_p" ${1+"$*"} \
-    >/dev/null 2>&1 </dev/null \
-    || { echo "muster: notifier $_n_cmd $_n_verb failed" >&2
-         retro_event notifier-failed "$_n_cmd" "$_n_verb muster-$_n_p"; }
+  _rn_say "$_n_cmd" "$_n_verb" "muster-$_n_p" ${1+"$*"} || :
+}
+
+# === the flags muster raises, and clearing them once they are not valid ====
+# A profile clears its own flag on a clean run. A flag whose profile is
+# never run again (renamed, removed) was orphaned for good: found on one
+# box, two flags from profiles renamed four days earlier, about repos
+# fixed the same day. So muster RECORDS each flag it raises, and clears
+# any it no longer has a reason for (_rn_flag_sweep); and each flag
+# carries a recheck, so the notifier's own reconcile clears it once
+# `muster flag-holds` says it is resolved, even if muster never runs that
+# profile again.
+
+_rn_flag_dir() { printf '%s/notified' "$(_rn_state_dir)"; }
+
+# _rn_recheck <key>: the "still needed?" command a flag carries, run
+# later by the notifier with `bash -c` in ITS environment, so everything
+# muster needs is passed through env(1), each word single-quoted. Fails
+# (no recheck, the flag is still raised) for a value holding a quote.
+_rn_recheck() {
+  _k_out='env'
+  for _k_w in "MUSTER_CONFIG=$SV_CONFIG" \
+    "MUSTER_STATE_DIR=$(_rn_state_dir)" \
+    ${MUSTER_ROOT:+"MUSTER_ROOT=$MUSTER_ROOT"} \
+    "$(_sc_runner)" flag-holds "$1"; do
+    case $_k_w in *\'*) return 1 ;; esac
+    _k_out="$_k_out '$_k_w'"
+  done
+  printf '%s' "$_k_out"
+}
+
+# _rn_say <notifier> <flag|clear> <key> [message]: one notification, and
+# the record of it. Fails, said and kept in retro, when the notifier does.
+_rn_say() {
+  _y_cmd=$1 _y_verb=$2 _y_key=$3; shift 3
+  _y_rec=$(_rn_flag_dir)/$_y_key
+  _y_ok=1
+  if [ "$_y_verb" = flag ]; then
+    if _y_chk=$(_rn_recheck "$_y_key"); then
+      "$_y_cmd" flag --recheck "$_y_chk" "$_y_key" "$*" \
+        >/dev/null 2>&1 </dev/null || _y_ok=
+    else
+      "$_y_cmd" flag "$_y_key" "$*" >/dev/null 2>&1 </dev/null || _y_ok=
+    fi
+    # The record names the CONFIG that raised it: staleness is judged
+    # against that config, so an ad hoc run under another one never
+    # clears this one's flags.
+    [ -z "$_y_ok" ] || { mkdir -p "$(_rn_flag_dir)" \
+      && printf '%s\n' "$SV_CONFIG" > "$_y_rec"; } || _y_ok=
+  else
+    "$_y_cmd" clear "$_y_key" >/dev/null 2>&1 </dev/null && rm -f "$_y_rec" \
+      || _y_ok=
+  fi
+  [ -z "$_y_ok" ] || return 0
+  echo "muster: notifier $_y_cmd $_y_verb failed for $_y_key" >&2
+  retro_event notifier-failed "$_y_cmd" "$_y_verb $_y_key"
+  return 1
+}
+
+# run_flag_stale: each RECORDED flag muster no longer has a reason for,
+# one key a line, judged against the config that raised it: a profile
+# flag whose profile that config no longer declares, the config flag
+# where it places nothing, and either when that config is gone. A config
+# that does not parse cannot say, so its flags are left.
+run_flag_stale() {
+  _w_d=$(_rn_flag_dir)
+  [ -d "$_w_d" ] || return 0
+  for _w_f in "$_w_d"/*; do
+    [ -f "$_w_f" ] || continue
+    _w_k=${_w_f##*/}
+    _w_c=$(head -n 1 "$_w_f")
+    [ -n "$_w_c" ] || _w_c=$SV_CONFIG   # a record from before the path
+    if [ -e "$_w_c" ]; then
+      _rn_flag_reason "$_w_k" "$_w_c" || printf '%s\n' "$_w_k"
+    else
+      printf '%s\n' "$_w_k"
+    fi
+  done
+}
+
+# _rn_flag_reason <key> <config>: does that config still give muster a
+# reason for this flag? True also when it cannot say (does not parse).
+# A ( ) body on purpose: SV_CONFIG is swapped for this question only.
+# shellcheck disable=SC2030,SC2031
+_rn_flag_reason() (
+  SV_CONFIG=$2
+  _sv_cfg_check 2>/dev/null || exit 0
+  case $1 in
+    muster.config) [ -n "$(_pl_roots)" ] ;;
+    muster-*) run_profiles | awk -v k="$1" '"muster-" $1 == k { f = 1 }
+      END { exit !f }' ;;
+    *) exit 0 ;;
+  esac
+)
+
+# run_flag_sweep: clear every stale recorded flag. After each run and in
+# `schedule install`, which is where a renamed profile shows up.
+run_flag_sweep() {
+  _s_cmd=$(run_notifier)
+  [ -n "$_s_cmd" ] && command -v "$_s_cmd" >/dev/null 2>&1 || return 0
+  _s_all=$(run_flag_stale)
+  while IFS= read -r _s_k; do
+    [ -z "$_s_k" ] || _rn_say "$_s_cmd" clear "$_s_k" || :
+  done <<KEYS
+$_s_all
+KEYS
+}
+
+# flag_holds_main <key>: is the flag still needed? The notifier's recheck
+# (grep semantics): 0 still needed, 1 resolved, 2 cannot say (it is
+# kept). From the config and the STORED runs only: instant, no network,
+# nothing written. A fix made by hand is seen at the profile's next run.
+flag_holds_main() {
+  [ "$#" = 1 ] || { echo "usage: muster flag-holds <flag>" >&2; return 2; }
+  survey_config 2>/dev/null || return 2
+  case $1 in
+    muster.config)
+      [ -n "$(_pl_roots)" ] && [ -s "$(_rn_config_store)" ] && return 0
+      return 1 ;;
+    muster-*) ;;
+    *) return 2 ;;
+  esac
+  _h_p=${1#muster-}
+  _h_l=$(_rn_profile "$_h_p") || return 1   # no longer declared
+  _h_d=$(_rn_state_dir)/$_h_p
+  [ -f "$_h_d/latest.meta" ] || return 1
+  _h_x=$(_rn_meta "$_h_d/latest.meta" exit)
+  case $_h_x in 0|1) ;; *) return 0 ;; esac   # its last run could not run
+  [ -n "$(_rn_flagged "${_h_l%% *}" "$_h_d/latest.records")" ] && return 0
+  return 1
 }
 
 # _rn_invoke <profile>: the verb, over the profile's selection. A run that
@@ -434,18 +560,12 @@ _rn_config_notify() {
   [ -n "$_cn_cmd" ] && command -v "$_cn_cmd" >/dev/null 2>&1 || return 0
   _cn_f=$(_rn_config_store)
   if [ -s "$_cn_f" ]; then
-    _cn_v=flag
-    "$_cn_cmd" flag muster.config "muster: $(grep -c . "$_cn_f") config" \
-      "fault(s) need a person; muster resolve lists each with its command" \
-      >/dev/null 2>&1 </dev/null || _cn_v=failed
+    _rn_say "$_cn_cmd" flag muster.config "muster: $(grep -c . "$_cn_f")" \
+      "config fault(s) need a person; muster resolve lists each with its" \
+      "command" || :
   else
-    _cn_v=clear
-    "$_cn_cmd" clear muster.config >/dev/null 2>&1 </dev/null \
-      || _cn_v=failed
+    _rn_say "$_cn_cmd" clear muster.config || :
   fi
-  [ "$_cn_v" != failed ] \
-    || { echo "muster: notifier $_cn_cmd failed for muster.config" >&2
-         retro_event notifier-failed "$_cn_cmd" muster.config; }
 }
 
 # _rn_report_config: report's config section, from the store.
@@ -569,6 +689,7 @@ run_main() {
   _rn_store "$_m_dir" "$_m_start-$$" "$_m_tmp"
   _rn_notify "$1" "$_m_dir" "$_m_rc"
   _rn_config_notify
+  run_flag_sweep
   _rn_unlock "$_m_dir"
   trap - EXIT
   return "$_m_rc"
@@ -596,6 +717,9 @@ _rn_meta() {   # <meta-file> <key> -> value, or -
 # Before the timer exists, the intent dates from the CONFIG that declared
 # it: an integrator writes the config, then installs, then checks, and
 # that sequence has to converge rather than read `never` in the gap.
+# SC2031: the only subshell that sets SV_CONFIG is _rn_flag_reason's,
+# deliberately; this reads the caller's.
+# shellcheck disable=SC2031
 _rn_intent_since() {
   case $2 in
     systemd) _sv_mtime "$(_sc_dir)/muster-$1.timer" \

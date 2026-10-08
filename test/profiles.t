@@ -304,10 +304,15 @@ assert "and released it after" test ! -e "$BOX"
 # === notify: the fleet's flag/clear protocol, as STATE =======================
 # The stub speaks intervention-required's interface and logs each call.
 N_LOG=$_T/notified
+# A flag's --recheck (the notifier's own extension) is logged apart, so
+# these assertions read the protocol's plain words (test/notify.t reads
+# the recheck).
 cat > "$_T/notifier" <<NOTIFIER
 #!/bin/sh
 case \$1 in flag|clear) ;; *) exit 9 ;; esac
-printf '%s\n' "\$*" >> '$N_LOG'
+_v=\$1; shift
+if [ "\$_v" = flag ] && [ "\$1" = --recheck ]; then shift 2; fi
+printf '%s\n' "\$_v \$*" >> '$N_LOG'
 NOTIFIER
 chmod +x "$_T/notifier"
 printf 'profile n owed 1h\nrepo one\nrepo nmoved\n' | h_cfg "$C/n"

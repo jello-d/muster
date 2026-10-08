@@ -181,6 +181,9 @@ _sc_install() {
     printf '%s\n' "$_i_ov" >&2
     return 2
   fi
+  # A renamed or removed profile leaves its flag behind: cleared here,
+  # where the profile set is applied, and after every run.
+  run_flag_sweep
   _i_want=$(_sc_wanted "$_i_list")
   _i_stray=$(_sc_strays "$_i_list")
   if [ -z "$_i_want$_i_stray" ]; then

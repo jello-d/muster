@@ -128,6 +128,24 @@ _ck_manage() {
     "place, so nothing feeds the banner; e.g. \`profile config placed 1h\`"
 }
 
+# _ck_flags: a recorded flag muster no longer has a reason for. Drift,
+# since `schedule install` (and every run) clears it; a FAULT when no
+# notifier is reachable, because then nothing here can.
+_ck_flags() {
+  _f_st=$(run_flag_stale)
+  [ -n "$_f_st" ] || return 0
+  _f_cmd=$(run_notifier)
+  _f_k=drift
+  [ -n "$_f_cmd" ] && command -v "$_f_cmd" >/dev/null 2>&1 || _f_k=fault
+  while IFS= read -r _f_s; do
+    _ck_add "$_f_k" "flag       $_f_s: raised by muster and no longer" \
+      "valid (its profile is not declared, or nothing is placed); a run" \
+      "or schedule install clears it"
+  done <<FLAGS
+$_f_st
+FLAGS
+}
+
 # _ck_retro: whether a review is due: the record covers more than a
 # quarter and no `muster retro done` falls in the last one. The cadence
 # agreed with the user as DATA rather than as a note to remember: a
@@ -202,6 +220,7 @@ STORES
 $_c_ov
 OVERLAPS
   [ -z "$(_pl_roots)" ] || _ck_placement
+  _ck_flags
   _c_np=$(run_notify_problem)
   [ -z "$_c_np" ] || _ck_add fault "notify     $_c_np"
   _ck_schedule

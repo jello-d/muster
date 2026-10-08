@@ -509,6 +509,27 @@ calls a bare name (or a path that is not executable) a fault, and
 `schedule install` refuses it. The environment override may be a name,
 since whoever sets it resolves it where they are.
 
+A FLAG IS CLEARED ONCE IT IS NO LONGER VALID, not only when its profile
+runs clean again. A renamed or removed profile never runs again, so its
+last flag used to stand forever (found: two flags four days old, about
+repos fixed the same day). So:
+
+- muster RECORDS each flag it raises (`<state>/notified/<flag>`, holding
+  the config that raised it) and, after every run and in `schedule
+  install`, clears any that config no longer gives a reason for: a
+  profile it no longer declares, a config flag where nothing is placed,
+  or a config that is gone. An ad hoc run under ANOTHER config never
+  clears this one's flags. `check` shows a stale one as drift (a fault
+  when no notifier is reachable to clear it).
+- each flag carries `--recheck '<env ...> muster flag-holds <flag>'`
+  (intervention-required's extension), so the notifier's own `reconcile`
+  clears it once resolved, even if muster never runs that profile
+  again. `muster flag-holds` reads the config and the STORED runs only:
+  0 still needed, 1 resolved, 2 cannot say (the flag is kept). Everything
+  it needs is passed through env(1), because the notifier runs it in its
+  own environment; a path holding a quote gets no recheck, never a
+  broken one.
+
 ### check
 
 `muster check` is the one comprehensive check: is all well with muster
