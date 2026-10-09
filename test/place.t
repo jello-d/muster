@@ -71,6 +71,15 @@ echo 'not added yet' > "$SRC/app/new.conf"
 pl
 expv "$DST/app/new.conf" new
 assert "an untracked, unignored file IS source (working tree)" test "$RC" = 1
+# The TABLE has one row per record and nothing else: a counter shared
+# with the drift list once started it eight blank rows down, invisible
+# to every porcelain assertion (found live, 2026-10-09).
+_tab=$("$MUSTER" placed 2>/dev/null)
+assert "the table: one row per record, plus its header" \
+  test "$(printf '%s\n' "$_tab" | grep -c .)" \
+    = "$(( $(printf '%s\n' "$OUT" | grep -c .) + 1 ))"
+assert "the table: no blank rows" \
+  test -z "$(printf '%s\n' "$_tab" | grep -E '^[[:space:]]*$')"
 
 # === place ====================================================================
 act place

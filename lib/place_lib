@@ -392,7 +392,9 @@ placement_records() { PL_RETIRE=''; _pl_dest_walk _pl_rec_cb records; }
 # `drift` prints only what `place` repairs, for a path profile (run_lib).
 _pl_render() {
   awk -v mode="$1" -v drift="$PL_DRIFT" '
-    BEGIN { n = split(drift, d, " "); for (i = 1; i <= n; i++) dv[d[i]] = 1 }
+    # nd, never n: n counts the rows of the table (reusing it started
+    # every table eight blank rows down, found live).
+    BEGIN { nd = split(drift, d, " "); for (i = 1; i <= nd; i++) dv[d[i]] = 1 }
     {
       split("", f)
       for (i = 1; i <= NF; i++) {
