@@ -514,6 +514,28 @@ assert "unreachable for over a day: catch-up flags it" \
 g "$ROOT/nunreach" remote set-url origin "$_T/origins/nunreach.git"
 urun u
 assert "reachable again: clean, cleared" test "$(nlast)" = "clear muster-u"
+# ONE failed fetch after a GOOD one, upstream quiet for years: forgiven.
+# A failed fetch empties FETCH_HEAD, and the reflogs date the last time
+# upstream MOVED, so without muster's own stamp of the good fetch a quiet
+# repo read years stale at its first failure (live, 2026-10-13: one dns
+# blip flagged 19 repos fetched fine 15 minutes before).
+for _u_f in logs/refs/remotes/origin/main logs/refs/remotes/origin/HEAD; do
+  [ ! -e "$ROOT/nunreach/.git/$_u_f" ] \
+    || touch -t 202001010000 "$ROOT/nunreach/.git/$_u_f"
+done
+g "$ROOT/nunreach" remote set-url origin "$_T/origins/no-such.git"
+urun u
+assert "one failure after a good fetch, upstream quiet: still fetch-failed" \
+  has "$(cat "$S/u/latest.records")" "fetch-failed"
+assert "but not flagged: the last GOOD fetch was just now" \
+  test "$(nlast)" = "clear muster-u"
+_u_st=$(find "$S/fetched" -path '*nunreach/last' 2>/dev/null | head -n 1)
+assert "the good fetch is stamped in muster's state" test -n "$_u_st"
+touch -t 202001010000 "$_u_st"
+urun u
+assert "and once that good fetch is over a day old, it flags" \
+  starts "$(nlast)" "flag muster-u muster u: 1 repo(s)"
+g "$ROOT/nunreach" remote set-url origin "$_T/origins/nunreach.git"
 
 # === the command line =======================================================
 cli run

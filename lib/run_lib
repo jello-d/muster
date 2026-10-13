@@ -52,10 +52,7 @@ RUN_ACTING='catch-up sync place'
 # flipped once that config declared `driver systemd` on every box.
 RUN_DRIVER_DEFAULT=manual
 
-_rn_state_dir() {
-  _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster
-  printf '%s' "${MUSTER_STATE_DIR:-$_d_base}"
-}
+_rn_state_dir() { sv_state_dir; }   # one definition, in survey_lib
 
 _rn_seconds() {   # <interval> -> seconds; fails on anything else
   case $1 in

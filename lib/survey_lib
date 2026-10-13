@@ -152,6 +152,14 @@ _sv_counts() {
 # stamped: read by mtime, the age of a stale ref said "just now" beside
 # its own fetch-failed flag. A fetch that succeeds writes at least one
 # line, so only a non-empty FETCH_HEAD counts.
+#
+# AND THEN THE LAST GOOD FETCH WAS LOST: with FETCH_HEAD emptied by one
+# failed fetch, the newest evidence left was the upstream ref's reflog,
+# which dates when upstream last MOVED, not when it was last asked. A
+# quiet repo fetched fine fifteen minutes earlier read "185h ago", past
+# the day a failed fetch is forgiven, so ONE dns blip flagged 19 repos
+# (found live, 2026-10-13). So muster stamps every fetch that SUCCEEDS
+# (_sv_fetch) in its own state, and that stamp is evidence too.
 _sv_fetched() {
   [ "$SV_UP" != - ] || return 0
   # The remote by NAME from config, not by splitting SV_UP: a remote's name
@@ -160,15 +168,35 @@ _sv_fetched() {
     || _f_remote=${SV_UP%%/*}
   SV_FETCHED=never
   for _f_rel in FETCH_HEAD "logs/$SV_UPREF" \
-      "logs/refs/remotes/$_f_remote/HEAD"; do
-    _f_path=$(_sv_git "$1" rev-parse --git-path "$_f_rel") || continue
-    case $_f_path in /*) ;; *) _f_path=$1/$_f_path ;; esac
+      "logs/refs/remotes/$_f_remote/HEAD" @stamp; do
+    if [ "$_f_rel" = @stamp ]; then _f_path=$(_sv_fetch_stamp "$1")
+    else
+      _f_path=$(_sv_git "$1" rev-parse --git-path "$_f_rel") || continue
+      case $_f_path in /*) ;; *) _f_path=$1/$_f_path ;; esac
+    fi
     [ "$_f_rel" != FETCH_HEAD ] || [ -s "$_f_path" ] || continue
+    [ -e "$_f_path" ] || continue
     _f_t=$(_sv_mtime "$_f_path") || continue
     if [ "$SV_FETCHED" = never ] || [ "$_f_t" -gt "$SV_FETCHED" ]; then
       SV_FETCHED=$_f_t
     fi
   done
+}
+
+# sv_state_dir: muster's state directory. Defined in the lowest lib that
+# needs it (survey stamps fetches there), so a verb that loads survey_lib
+# alone resolves the same directory as every other.
+sv_state_dir() {
+  _d_base=${XDG_STATE_HOME:-$HOME/.local/state}/muster
+  printf '%s' "${MUSTER_STATE_DIR:-$_d_base}"
+}
+
+# _sv_fetch_stamp <path>: the FILE stamping this clone's last fetch that
+# SUCCEEDED: <state>/fetched/<the repo's absolute path>/last, a file
+# inside a directory per repo so nested repo paths cannot collide.
+_sv_fetch_stamp() {
+  printf '%s/fetched%s/last' "$(sv_state_dir)" \
+    "$(_sv_resolve "$1" || printf '%s' "$1")"
 }
 
 # _sv_changes <path>: tracked changes (staged or not) and untracked files.
@@ -227,6 +255,11 @@ _sv_fetch() {
   if _x_err=$(GIT_TERMINAL_PROMPT=0 \
       GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
       $_x_to git -C "$1" fetch --quiet "$_x_remote" 2>&1 </dev/null); then
+    # Stamped only on SUCCESS, which is the whole point of the stamp. A
+    # stamp that cannot be written loses nothing but the forgiveness.
+    _x_st=$(_sv_fetch_stamp "$1")
+    mkdir -p "$(dirname -- "$_x_st")" 2>/dev/null && touch "$_x_st" \
+      2>/dev/null || :
     return 0
   fi
   SV_FETCH_FAILED=1
