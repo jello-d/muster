@@ -66,7 +66,7 @@ cli placed
 expect_rc 2 "a path profile with a repo selector is a config error"
 
 # === a path profile: observe, then act =====================================
-printf 'manage path\n%s\nprofile config placed -\n' "$PLACE" \
+printf 'manage path\nplace-grace 0m\n%s\nprofile config placed -\n' "$PLACE" \
   > "$MUSTER_CONFIG"
 cli check
 assert "a placed profile: the note is gone" lacks "$OUT" "no profile runs"
@@ -77,7 +77,7 @@ cli report
 assert "report: the drift row, drawn by placement" \
   has "$OUT" "new        $DST/a.conf"
 assert "observing placed nothing" test ! -e "$DST/a.conf"
-printf 'manage path\n%s\nprofile config place -\n' "$PLACE" \
+printf 'manage path\nplace-grace 0m\n%s\nprofile config place -\n' "$PLACE" \
   > "$MUSTER_CONFIG"
 cli run config
 expect_rc 0 "run place: placed, nothing left"
@@ -159,7 +159,7 @@ PAY=$_T/payload
 PD=$HOME/.config/pay
 mkdir -p "$PAY/data"
 echo 'shipped' > "$PAY/p.conf"
-printf 'manage path\nplace %s %s user-editable\ncapture %s\n' \
+printf 'manage path\nplace-grace 0m\nplace %s %s user-editable\ncapture %s\n' \
   "$PAY" "$PD" "$PD/data" > "$MUSTER_CONFIG"
 cli place
 echo 'live edit' > "$PD/p.conf"
@@ -178,5 +178,91 @@ echo 'app made' > "$PD/data/new.json"
 cli capture
 expect_rc 2 "capture into a non-work-tree source: refused"
 assert "nothing captured" test ! -e "$PAY/data/new.json"
+
+# === place-grace: a fresh change is not an alarm (2026-10-14) ===============
+# An edit to a placed file alerted five minutes after it was made, and
+# the verdict, `converged`, needed nobody at all. So a path profile
+# flags only drift UNCHANGED for place-grace (default 60m), never
+# `converged`; a live edit owing a merge-back is a note, not a fault,
+# for as long; and the flag's recheck judges placement live.
+# Its own state: the sections above leave baselines this config does not
+# declare (unlayered, rightly), which would fill the store under test.
+export MUSTER_STATE_DIR="$_T/gstate"
+GS=$_T/gsrc
+GD=$HOME/.config/grace
+mkdir -p "$GS"
+echo 'one' > "$GS/one.conf"
+git init -q "$GS"; g "$GS" add -A; g "$GS" commit -m seed
+N_LOG=$_T/glog
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\n' "$N_LOG" > "$_T/gnotify"
+chmod +x "$_T/gnotify"
+gcfg() {
+  printf 'manage path\nplace %s %s user-editable\nprofile g placed -\n%s' \
+    "$GS" "$GD" "$1" > "$MUSTER_CONFIG"
+}
+grun() { MUSTER_NOTIFY=$_T/gnotify cli run g; }
+glast() { grep ' muster-g' "$N_LOG" 2>/dev/null | tail -n 1; }
+old() { touch -t 202001010000 "$@"; }
+gcfg ''
+grun
+expect_rc 0 "a NEW file, just written: not yet attention"
+assert "not flagged" starts "$(glast)" "clear muster-g"
+old "$GS/one.conf"
+grun
+expect_rc 1 "the same file, unchanged past the grace: attention"
+assert "flagged, as a PATH" \
+  starts "$(glast)" "flag --recheck"
+assert "worded as paths, not repos" has "$(glast)" "1 path(s) need attention"
+cli place
+MUSTER_NOTIFY=$_T/gnotify cli flag-holds muster-g
+expect_rc 1 "fixed by hand: the recheck sees it LIVE, before any run"
+grun
+assert "and the next run clears it" starts "$(glast)" "clear muster-g"
+# converged: live already equals the source; nobody needs to act, ever.
+echo 'two' > "$GS/one.conf"; echo 'two' > "$GD/one.conf"
+g "$GS" commit -qam two   # committed: merge-back skips a modified source
+old "$GS/one.conf" "$GD/one.conf"
+cli placed --porcelain
+assert "converged, and old" has "$OUT" "verdict=converged"
+grun
+expect_rc 0 "converged is never attention"
+assert "and never flagged" starts "$(glast)" "clear muster-g"
+cli place
+# A live edit owing a merge-back: a note within the grace, then a fault.
+echo 'live edit' > "$GD/one.conf"
+cli check
+assert "a fresh live edit: a note" has "$OUT" "note   place      merge-back"
+assert "naming the grace" has "$OUT" "needs you once unchanged for place-grace"
+assert "not a fault" lacks "$OUT" "fault merge-back"
+grun
+assert "and not in the banner's store" \
+  test ! -s "$_T/gstate/config.faults"
+old "$GD/one.conf" "$GS/one.conf"
+cli check
+expect_rc 3 "the same edit past the grace: a fault"
+assert "with its command" has "$OUT" "then muster merge-back"
+grun
+assert "now in the banner's store" has "$(cat "$_T/gstate/config.faults")" \
+  "merge-back $GD/one.conf"
+cli merge-back
+# The grace is a setting.
+echo 'three' > "$GS/one.conf"
+touch -d '@'"$(( $(date +%s) - 5400 ))" "$GS/one.conf"   # 90m ago
+gcfg 'place-grace 2h
+'
+grun
+expect_rc 0 "place-grace 2h: a 90-minute-old change is not yet due"
+gcfg 'place-grace 1h
+'
+grun
+expect_rc 1 "place-grace 1h: the same change is due"
+gcfg 'place-grace 1h
+place-grace 2h
+'
+cli placed
+expect_rc 2 "place-grace twice: a config error"
+printf 'manage repo\nplace-grace 1h\n' > "$MUSTER_CONFIG"
+cli survey one
+expect_rc 2 "place-grace is a path line: refused on a repo-only box"
 
 h_verdict

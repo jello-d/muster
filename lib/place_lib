@@ -369,9 +369,33 @@ _pl_root_ok() {
 }
 
 _pl_record() {   # one porcelain line from the PL_ globals
-  printf 'path=%s verdict=%s policy=%s source=%s also=%s\n' \
+  printf 'path=%s verdict=%s policy=%s source=%s also=%s since=%s\n' \
     "$(_sv_esc "$PL_D")" "$PL_V" "$PL_POL" "$(_sv_esc "$PL_S")" \
-    "$(_sv_esc "${PL_ALSO:--}")"
+    "$(_sv_esc "${PL_ALSO:--}")" "$(_pl_since)"
+}
+
+# _pl_since: when this file last CHANGED on either side, the newer of the
+# source and the live copy (the baseline's time when neither exists), or
+# `-`. The clock for place-grace: someone mid-edit is not an alarm.
+_pl_since() {
+  _c_t=0
+  for _c_f in "$PL_S" "$PL_D"; do
+    [ -f "$_c_f" ] || continue
+    _c_m=$(_sv_mtime "$_c_f") || continue
+    [ "$_c_m" -le "$_c_t" ] || _c_t=$_c_m
+  done
+  if [ "$_c_t" = 0 ]; then
+    _c_t=$(_sv_mtime "${PL_M:-/nonexistent}" 2>/dev/null) || _c_t=-
+  fi
+  printf '%s' "$_c_t"
+}
+
+# pl_grace: `place-grace` in seconds, 60m when the config says nothing.
+pl_grace() {
+  _g_a=$(_sv_cfg_all place-grace | head -n 1)
+  if [ -n "$_g_a" ] && _g_s=$(_rn_seconds "$_g_a"); then printf '%s' "$_g_s"
+  else printf '%s' 3600
+  fi
 }
 
 # _pl_rec_cb: placement_records' callback. A drift verdict on a path the
@@ -389,9 +413,14 @@ placement_records() { PL_RETIRE=''; _pl_dest_walk _pl_rec_cb records; }
 
 # _pl_render <porcelain|table|flagged|drift>: exit 1 unless every file is
 # in sync (app-held and unmanaged are in sync by definition: not ours).
-# `drift` prints only what `place` repairs, for a path profile (run_lib).
+# `drift` prints only what `place` repairs; `due` (what a path profile
+# flags, run_lib) only the drift a PERSON should hear about: never
+# `converged` (live already equals the source, place records it
+# silently), and nothing changed within place-grace (agreed with the
+# user, 2026-10-14: an edit alerted five minutes after it was made).
 _pl_render() {
-  awk -v mode="$1" -v drift="$PL_DRIFT" '
+  awk -v mode="$1" -v drift="$PL_DRIFT" -v now="$(date +%s)" \
+    -v grace="$(pl_grace)" '
     # nd, never n: n counts the rows of the table (reusing it started
     # every table eight blank rows down, found live).
     BEGIN { nd = split(drift, d, " "); for (i = 1; i <= nd; i++) dv[d[i]] = 1 }
@@ -409,6 +438,11 @@ _pl_render() {
       if (mode == "porcelain") { print; next }
       if (mode == "flagged") { if (rb) print; next }
       if (mode == "drift") { if (v in dv) print; next }
+      if (mode == "due") {
+        if ((v in dv) && v != "converged" && \
+          !(f["since"] ~ /^[0-9]+$/ && now - f["since"] < grace)) print
+        next
+      }
       n++; pa[n] = f["path"]; vd[n] = v; po[n] = f["policy"]
       if (length(vd[n]) > wv) wv = length(vd[n])
     }

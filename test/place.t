@@ -28,7 +28,11 @@ g "$TK" add -A
 g "$TK" commit -m seed
 echo 'runtime junk' > "$SRC/app/junk.log"   # ignored: never source
 export MUSTER_CONFIG="$_T/cfg"
+# place-grace 0m: these assertions are about verdicts and faults, not
+# timing, so a fresh live edit counts at once (the grace has its own
+# tests in test/manage.t).
 cat > "$MUSTER_CONFIG" <<CFG
+place-grace 0m
 place $SRC $DST user-editable
 policy $DST/shared/ro.conf repo-owned
 manage repo

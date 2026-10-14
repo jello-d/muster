@@ -423,7 +423,7 @@ git init -q "$CTK"
 g "$CTK" add -A
 g "$CTK" commit -m seed
 printf 'profile c owed 1h\nrepo one\nplace %s %s user-editable\n' \
-  "$CTK/conf" "$HOME/cdst" | h_cfg "$C/c"
+  "$CTK/conf" "$HOME/cdst" | sed '1i place-grace 0m' | h_cfg "$C/c"
 crun() { MUSTER_CONFIG=$C/c MUSTER_NOTIFY=$_T/notifier cli run c; }
 crep() { MUSTER_CONFIG=$C/c cli report "$@"; }
 MUSTER_CONFIG=$C/c "$MUSTER" place >/dev/null 2>&1

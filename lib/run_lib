@@ -215,7 +215,7 @@ _rn_flagged() {
     placed|place) _rn_r=_pl_render _rn_k='verdict' _rn_v=verdict ;;
   esac
   _rn_m=flagged
-  [ "$(sv_verb_kind "$1")" != path ] || _rn_m=drift
+  [ "$(sv_verb_kind "$1")" != path ] || _rn_m=due
   "$_rn_r" "$_rn_m" < "$2" 2>/dev/null | awk -v keys="$_rn_k" \
     -v vk="$_rn_v" -v now="$(date +%s)" -v max="$RN_UNREACH_MAX" '{
     split("", f)
@@ -331,7 +331,9 @@ _rn_notify() {
   if [ "$3" -ge 2 ]; then
     set -- "$1" flag "muster $1 could not run (exit $3): muster report"
   elif [ "$_n_count" -gt 0 ]; then
-    set -- "$1" flag "muster $1: $_n_count repo(s) need attention:" \
+    _n_unit=repo
+    [ "$(sv_verb_kind "$RN_VERB")" != path ] || _n_unit=path
+    set -- "$1" flag "muster $1: $_n_count $_n_unit(s) need attention:" \
       "$_n_names"
   else
     set -- "$1" clear
@@ -453,8 +455,12 @@ flag_holds_main() {
   [ "$#" = 1 ] || { echo "usage: muster flag-holds <flag>" >&2; return 2; }
   survey_config 2>/dev/null || return 2
   case $1 in
+    # Placement is judged LIVE (seconds, local, no network), so a fix
+    # clears at the notifier's next reconcile, not the next profile run.
     muster.config)
-      [ -n "$(_pl_roots)" ] && [ -s "$(_rn_config_store)" ] && return 0
+      [ -n "$(_pl_roots)" ] || return 1
+      _h_f=$(placement_findings 2>/dev/null) || return 2
+      printf '%s\n' "$_h_f" | grep -q '^fault ' && return 0
       return 1 ;;
     muster-*) ;;
     *) return 2 ;;
@@ -465,6 +471,11 @@ flag_holds_main() {
   [ -f "$_h_d/latest.meta" ] || return 1
   _h_x=$(_rn_meta "$_h_d/latest.meta" exit)
   case $_h_x in 0|1) ;; *) return 0 ;; esac   # its last run could not run
+  if [ "$(sv_verb_kind "${_h_l%% *}")" = path ]; then
+    _h_r=$(placement_records 2>/dev/null) || return 2
+    [ -n "$(printf '%s\n' "$_h_r" | _pl_render due)" ] && return 0
+    return 1
+  fi
   [ -n "$(_rn_flagged "${_h_l%% *}" "$_h_d/latest.records")" ] && return 0
   return 1
 }
@@ -508,8 +519,9 @@ _rn_invoke() {
 # _rn_invoke_path <profile>: a path profile. `place` acts first (what it
 # did goes to the run's err log; each placement is also tallied by the
 # verb), then the records are a fresh `placed`. The exit is the DRIFT
-# alone, 1 when any is left: faults are the config store's, flagged as
-# muster.config, so a fault never reads as this profile needing a run.
+# alone, 1 when any is DUE (place-grace, and never `converged`): faults
+# are the config store's, flagged as muster.config, so a fault never
+# reads as this profile needing a run.
 _rn_invoke_path() {
   if [ "$RN_VERB" = place ]; then
     _ip_rc=0
@@ -521,7 +533,7 @@ _rn_invoke_path() {
   _ip_rec=$("$MUSTER_BIN" placed --porcelain </dev/null) || _ip_rc=$?
   [ "$_ip_rc" -lt 2 ] || return 2
   [ -z "$_ip_rec" ] || printf '%s\n' "$_ip_rec"
-  [ -z "$(printf '%s\n' "$_ip_rec" | _pl_render drift)" ]
+  [ -z "$(printf '%s\n' "$_ip_rec" | _pl_render due)" ]
 }
 
 # CONFIG FAULTS REACH THE BANNER (agreed with the user, 2026-10-03). A
@@ -925,7 +937,7 @@ _rn_render_attention() {   # <verb>: records on stdin
     survey) _sv_render attention ;;
     owed) _ow_render attention ;;
     catch-up|sync) _cu_render attention ;;
-    placed|place) _pl_render drift | awk '{
+    placed|place) _pl_render due | awk '{
         split("", f)
         for (i = 1; i <= NF; i++) {
           k = $i; sub(/=.*/, "", k); v = $i; sub(/^[^=]*=/, "", v)

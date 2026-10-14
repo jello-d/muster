@@ -416,7 +416,9 @@ a verb, how often, and which repos.
                    or placed (observe) or place (act), over EVERY
                    placed path, taking no selectors, so two `place`
                    profiles always overlap. A path profile's rows are
-                   its drift; its faults are muster.config's. No
+                   its DUE drift: never `converged` (live already
+                   equals the source), and nothing changed within
+                   `place-grace`. Its faults are muster.config's. No
                    profile merges back or captures
         interval   30m, 2h, 1d; or - for a manual profile
         driver     WHO RUNS it: muster's own timers (systemd), the
@@ -612,6 +614,13 @@ root pairs and per-file overrides:
     place <source-root> <dest-root> <user-editable|repo-owned|app-owned>
     policy <dest-path> <user-editable|repo-owned|app-owned>
     capture <dest-dir>     an application creates files here (P10)
+    place-grace <age>      how long a placed file may sit freshly changed
+                           before it is attention (default 60m): drift
+                           in a path profile, and a live edit owing a
+                           merge-back, capture or conflict decision,
+                           which is a `check` note until then. Timed
+                           from the newer of the source and live copy,
+                           so someone mid-edit is not an alarm
 
 LAYERS (P14): several `place` lines may share one destination root, one
 per layer (the integrator keys them on its flavor categories); a layer's

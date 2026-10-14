@@ -144,7 +144,7 @@ CT=$_T/ct
 mkdir -p "$CT/c" "$HOME/cd"
 echo one > "$CT/c/a.conf"
 git init -q "$CT"; g "$CT" add -A; g "$CT" commit -m seed
-printf 'profile w owed 1h ahead\nplace %s %s user-editable\n' \
+printf 'profile w owed 1h ahead\nplace-grace 0m\nplace %s %s user-editable\n' \
   "$CT/c" "$HOME/cd" | h_cfg "$MUSTER_CONFIG"
 cli place
 echo 'live edit' > "$HOME/cd/a.conf"

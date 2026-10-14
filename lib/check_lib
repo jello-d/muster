@@ -251,10 +251,24 @@ OVERLAPS
 # should know.
 placement_findings() {
   _g_recs=$(placement_records)
+  _g_gr=$(pl_grace)
   while IFS= read -r _g_r; do
     [ -n "$_g_r" ] || continue
     _g_v=$(_st_field "$_g_r" verdict)
     _g_p=$(_st_unesc "$(_st_field "$_g_r" path)")
+    # A LIVE EDIT within place-grace is a note, not yet a fault: someone
+    # may be mid-edit (agreed with the user, 2026-10-14). So it neither
+    # fails check nor reaches the banner until the grace is out.
+    case $_g_v in merge-back|capture|conflict)
+      _g_s=$(_st_field "$_g_r" since)
+      if [ -n "$_g_s" ] && [ "$_g_s" != - ] \
+        && [ $(( $(date +%s) - _g_s )) -lt "$_g_gr" ]; then
+        echo "note place      $_g_v $_g_p: changed" \
+          "$(( ($(date +%s) - _g_s) / 60 ))m ago; needs you once" \
+          "unchanged for place-grace"
+        continue
+      fi ;;
+    esac
     case $_g_v in
       in-sync|app-held|unmanaged) ;;
       new|missing|place|converged|migrate|migrate-dir|displace|orphan)

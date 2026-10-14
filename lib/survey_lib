@@ -384,6 +384,9 @@ survey_record() {
 #                            manage line muster still behaves as before
 #                            (both), and check notes it: that is
 #                            temporary (R12 step 1); it will be an error
+#   place-grace <age>        how long a placed file may sit freshly
+#                            changed (drift, or a live edit owing a
+#                            merge-back) before it is attention; 60m
 #   artifact <canonical> <relpath>... [requires <relpath>...]
 #                            a vendored file: its canonical copy, the
 #                            path(s) a repo may carry it at, and what a
@@ -465,7 +468,7 @@ sv_manage_kind() {
   case $1 in
     root|origin|repo|deployed|artifact|expect|hold|push-grace|\
     reseed-grace) echo repo ;;
-    place|policy|capture) echo path ;;
+    place|policy|capture|place-grace) echo path ;;
     profile) sv_verb_kind "${2:-}" ;;
   esac
 }
@@ -566,6 +569,10 @@ _sv_cfg_lines() {
         _k_pg=$((${_k_pg:-0} + 1))
         [ -n "$(_rn_seconds "$_k_a")" ] && [ -z "$_k_b" ] \
           && [ "$_k_pg" = 1 ] && continue ;;
+      place-grace)
+        _k_lg=$((${_k_lg:-0} + 1))
+        [ -n "$(_rn_seconds "$_k_a")" ] && [ -z "$_k_b" ] \
+          && [ "$_k_lg" = 1 ] && continue ;;
       manage) case $_k_a in repo|path) [ -z "$_k_b" ] && continue ;; esac ;;
       keep)
         _k_kp=$((${_k_kp:-0} + 1))
