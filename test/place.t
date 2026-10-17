@@ -935,4 +935,21 @@ for _sh in dash bash ksh mksh zsh; do
   assert "$_sh: the same placement records as sh" test "$_o" = "$_base"
 done
 
+# === SIGPIPE ignored, as systemd does in every service ======================
+# A pipeline whose reader quits early made every later write an EPIPE,
+# and dash printed `printf: I/O error` into each timer run's log (two
+# boxes, 2026-10-16). A root with many files makes the race certain.
+BIG=$_T/bigsrc
+mkdir -p "$BIG"
+_i=0
+while [ "$_i" -lt 400 ]; do : > "$BIG/f$_i"; _i=$((_i + 1)); done
+git init -q "$BIG"; g "$BIG" add -A; g "$BIG" commit -m big
+printf 'place %s %s/big user-editable\n' "$BIG" "$HOME" | h_cfg "$_T/bigcfg"
+_e=$(for _i in 1 2 3; do
+  MUSTER_CONFIG=$_T/bigcfg sh -c 'trap "" PIPE; exec "$0" placed --porcelain' \
+    "$MUSTER" 2>&1 >/dev/null
+done)
+assert "SIGPIPE ignored: no write errors ($(printf '%s' "$_e" | head -c 80))" \
+  test -z "$_e"
+
 h_verdict

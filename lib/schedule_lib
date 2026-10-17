@@ -83,6 +83,12 @@ _sc_service() {
   # teaches people to ignore red. Exit 2 and up (could not run) still
   # fails the unit. The CLI keeps its contract: `muster run` exits 1.
   printf 'SuccessExitStatus=1\n'
+  # systemd IGNORES SIGPIPE in a service by default, so a pipeline whose
+  # reader quits early (`... | head -n 1`) turns every later write into
+  # an EPIPE error instead of a quiet stop: `printf: I/O error` in each
+  # timer run's log, never in a terminal (2026-10-16). muster's shell is
+  # written for the default, so the unit restores it.
+  printf 'IgnoreSIGPIPE=no\n'
   printf 'Environment=%s\n' "$_v_cfg"
   for _v_k in MUSTER_ROOT MUSTER_STATE_DIR MUSTER_NOTIFY MUSTER_KEEP; do
     if [ "$_v_k" = MUSTER_NOTIFY ]; then _v_v=$(run_notifier)

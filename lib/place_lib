@@ -363,9 +363,14 @@ _pl_drift_verdict() {
 # _pl_root_ok <source-root>: the mass-deletion guard (P8). A source root
 # that is missing, unreadable or EMPTY would read as "everything was
 # removed", so it places and removes nothing.
+#
+# `sed -n 1p`, never `head -n 1`: head closes the pipe while the source
+# loop is still printing, and where SIGPIPE is ignored (systemd's default
+# for every service) the next write fails and dash says `printf: I/O
+# error`, which landed in a timer run's log on two boxes (2026-10-16).
 _pl_root_ok() {
   [ -d "$1" ] && [ -r "$1" ] && [ -x "$1" ] || return 1
-  [ -n "$(_pl_sources "$1" | head -n 1)" ]
+  [ -n "$(_pl_sources "$1" | sed -n 1p)" ]
 }
 
 _pl_record() {   # one porcelain line from the PL_ globals

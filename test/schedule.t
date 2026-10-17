@@ -67,6 +67,8 @@ assert "service: the config is baked in" \
   has "$SVC" "Environment=\"MUSTER_CONFIG=$C/two\""
 assert "service: the state dir is baked in" \
   has "$SVC" "Environment=\"MUSTER_STATE_DIR=$_T/state\""
+assert "service: restores SIGPIPE (systemd ignores it in a service)" \
+  has "$SVC" "IgnoreSIGPIPE=no"
 assert "service: oneshot" has "$SVC" "Type=oneshot"
 assert "timer: the profile's interval" has "$TMR" "OnUnitActiveSec=30m"
 assert "timer: wanted by timers.target" has "$TMR" "WantedBy=timers.target"
