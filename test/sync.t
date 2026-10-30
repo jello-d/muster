@@ -300,4 +300,112 @@ sy --bogus
 expect_rc 2 "an unknown option"
 assert "named as sync's" has "$ERR" "muster sync: unknown option"
 
+# === an IDLE holder does not hold a repo (M1, 2026-10-29) ==================
+# Four agent sessions restored at boot and never used held their repos for
+# a day. A holder with NO children whose TERMINAL has been quiet for
+# idle-after (1h) no longer declines the pull; it is named in the record.
+# A real pty from script(1), its times set back by hand.
+assert "script(1) is here to give a holder a terminal" \
+  test -n "$(command -v script)"
+hold() {   # <dir> <command>: run <command> in <dir> on a pty; PID set
+  _h_pf=$_T/holder.pid
+  rm -f "$_h_pf"
+  ( cd "$_T" && exec script -qfc \
+    "cd '$1' && echo \$\$ > '$_h_pf' && exec $2" /dev/null \
+    </dev/null >/dev/null 2>&1 ) &
+  _h_n=0
+  while [ ! -s "$_h_pf" ] && [ "$_h_n" -lt 50 ]; do
+    sleep 0.1; _h_n=$((_h_n + 1)); done
+  PID=$(cat "$_h_pf")
+  sleep 0.3
+}
+age() { touch -d "$2 ago" "$(readlink "/proc/$1/fd/0")"; }   # <pid> <age>
+unhold() { kill "$1" 2>/dev/null; sleep 0.2; }
+
+mkrepo idler; upstream_moves idler
+hold "$ROOT/idler" 'sleep 300'
+assert "the holder has a terminal" \
+  has "$(readlink "/proc/$PID/fd/0")" /dev/pts/
+sy idler
+expect idler result in-use
+assert "a terminal active just now: in-use, as before" \
+  starts "$(field idler in_use_by)" "sleep:$PID"
+age "$PID" '2 hours'
+sy idler
+expect idler result ok
+assert "quiet two hours, no children: pulled" \
+  test "$(head_of "$ROOT/idler")" = "$(origin_head idler)"
+assert "the record names the idle holder" \
+  starts "$(field idler idle_by)" "sleep:$PID:"
+assert "...and how long it was quiet" \
+  test "$(field idler idle_by | cut -d: -f3)" -ge 7000
+assert "an idle holder is not in_use_by" test "$(field idler in_use_by)" = -
+upstream_moves idler
+OUT=$("$MUSTER" sync idler 2>/dev/null)
+assert "the table says so" has "$OUT" "ok (idle sleep 2h)"
+assert "and retro tallies it" \
+  has "$(cat "$S"/retro/tally/* 2>/dev/null)" "pulled-under-idle:sleep idler"
+unhold "$PID"
+
+# THE LIVE SHAPE: a shell (inside the repo) that launched the idle
+# program. Its child is idle, so it is a parked shell in all but name;
+# found live, where every idle agent's own shell still held its repo.
+mkrepo launched; upstream_moves launched
+hold "$ROOT/launched" "sh -c 'sleep 300; :'"
+age "$PID" '2 hours'
+sy launched
+expect launched result ok
+assert "a shell whose child is idle: pulled, and the PROGRAM is named" \
+  starts "$(field launched idle_by)" "sleep:"
+pkill -P "$PID" 2>/dev/null; unhold "$PID"
+
+# A shell is idle only if what it runs is: here its child (a program
+# with a child of its own) has moved OUTSIDE the repo, so only the shell
+# holds it, and only by what it is running.
+mkrepo farkid; upstream_moves farkid
+hold "$ROOT/farkid" "sh -c '(cd / && exec timeout 300 sleep 300); :'"
+age "$PID" '2 hours'
+_fk=$(head_of "$ROOT/farkid")
+sy farkid
+expect farkid result in-use
+assert "a shell whose child is LIVE, even elsewhere: in-use" \
+  test "$(head_of "$ROOT/farkid")" = "$_fk"
+pkill -P "$PID" 2>/dev/null; unhold "$PID"
+
+# A program with a child is running something, however quietly (an
+# agent running a silent build): it holds, whatever its terminal says.
+mkrepo busyidle; upstream_moves busyidle
+hold "$ROOT/busyidle" 'timeout 300 sleep 300'
+age "$PID" '2 hours'
+_bi=$(head_of "$ROOT/busyidle")
+sy busyidle
+expect busyidle result in-use
+assert "quiet terminal but a program with a CHILD: in-use" \
+  test "$(head_of "$ROOT/busyidle")" = "$_bi"
+assert "...named" starts "$(field busyidle in_use_by)" "timeout:"
+pkill -P "$PID" 2>/dev/null; unhold "$PID"
+
+# touched still wins over an idle holder: it is what an edit leaves.
+mkrepo idletouched; upstream_moves idletouched
+sleep 1
+touch "$ROOT/idletouched/f"   # a tracked file saved since HEAD moved
+hold "$ROOT/idletouched" 'sleep 300'
+age "$PID" '2 hours'
+sy idletouched
+expect idletouched result touched
+unhold "$PID"
+
+# The setting.
+mkrepo idlelong; upstream_moves idlelong
+printf 'idle-after 3h\n' | h_cfg "$MUSTER_CONFIG"
+hold "$ROOT/idlelong" 'sleep 300'
+age "$PID" '2 hours'
+sy idlelong
+expect idlelong result in-use
+unhold "$PID"
+h_cfg "$MUSTER_CONFIG" </dev/null
+printf 'idle-after 1h\nidle-after 2h\n' | h_cfg "$_T/ia2"
+OUT=$(MUSTER_CONFIG=$_T/ia2 "$MUSTER" sync idlelong 2>&1); RC=$?
+expect_rc 2 "idle-after twice: a config error"
+
 h_verdict

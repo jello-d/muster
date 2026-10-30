@@ -193,6 +193,100 @@ _cu_cwds() {
     done
 }
 
+# AN IDLE SESSION DOES NOT HOLD A REPO (M1 in _muster-requests-tackup.md,
+# the user's number: idle an hour). Measured on one box, 2026-10-29: four
+# agent sessions restored at boot and never used held their repos for a
+# day, and every pull was declined. Their terminals had seen neither
+# output nor input for 22 hours (an idle agent TUI does not redraw),
+# while live ones moved within seconds; CPU was no use, an idle session
+# still ticks. A session running anything, even a silent hour-long
+# build, has a CHILD process, and an idle one has none. So a holder is
+# idle when its terminal has been quiet for `idle-after` and it has no
+# children; or it is a SHELL whose children are all idle by the same
+# rule, since the agent's own launcher (mux runs a shell that runs the
+# agent, both inside the repo) is a parked shell in all but name. Found
+# live: without that clause, every idle agent's shell still held the
+# repo, and the change fixed nothing. One with no terminal holds.
+
+# _cu_idle_after: `idle-after` in seconds, 1h when the config is silent.
+_cu_idle_after() {
+  _i_a=$(_sv_cfg_all idle-after | head -n 1)
+  if [ -n "$_i_a" ] && _i_s=$(_rn_seconds "$_i_a"); then printf '%s' "$_i_s"
+  else printf '%s' 3600
+  fi
+}
+
+# _cu_tty_quiet <pid> <now>: seconds since its terminal last saw output
+# (mtime) or input (atime): the first of fds 0, 1, 2 that is a terminal.
+# Fails when it has none, or none can be read: not measurable.
+_cu_tty_quiet() {
+  for _q_fd in 0 1 2; do
+    _q_t=$(readlink "/proc/$1/fd/$_q_fd" 2>/dev/null) || continue
+    case $_q_t in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac
+    _q_m=$(stat -c %Y -- "$_q_t" 2>/dev/null) || continue
+    _q_x=$(stat -c %X -- "$_q_t" 2>/dev/null) || continue
+    [ "$_q_x" -le "$_q_m" ] || _q_m=$_q_x
+    printf '%s' "$(( $2 - _q_m ))"
+    return 0
+  done
+  return 1
+}
+
+# _cu_idle <pid> <now> <limit>: is this process idle (above)? Prints how
+# long its terminal has been quiet when it is. Each level runs in its
+# own subshell, so the recursion keeps its variables.
+_cu_idle() (
+  _e_q=$(_cu_tty_quiet "$1" "$2") || exit 1
+  [ "$_e_q" -ge "$3" ] || exit 1
+  _e_k=$(cat /proc/"$1"/task/*/children 2>/dev/null) || _e_k=
+  if [ -n "$_e_k" ]; then
+    _e_n=$(cat "/proc/$1/comm" 2>/dev/null) || exit 1
+    printf '%s\n' "${_e_n#-}" | grep -Eq "$CU_SHELLS" || exit 1
+    for _e_c in $_e_k; do
+      _cu_idle "$_e_c" "$2" "$3" >/dev/null || exit 1
+    done
+  fi
+  printf '%s' "$_e_q"
+)
+
+# _cu_holders <repo>: CU_INUSE_BY names the best LIVE holder ("prog:pid",
+# a program preferred over a shell), or `-`; CU_IDLE_BY names an idle one
+# ("prog:pid:seconds", the most recently active), or `-`.
+_cu_holders() {
+  CU_INUSE_BY=- CU_IDLE_BY=-
+  _h_now=$(date +%s) _h_lim=$(_cu_idle_after) _h_live=''
+  _h_tab=$(printf '\t')
+  _h_all=$(printf '%s\n' "$CU_CWDS" | awk -F '\t' -v r="$1" \
+    '$3 == r || index($3, r "/") == 1')
+  [ -n "$_h_all" ] || return 0
+  while IFS=$_h_tab read -r _h_pid _h_cm _h_cwd; do
+    [ -n "$_h_pid" ] || continue
+    if _h_q=$(_cu_idle "$_h_pid" "$_h_now" "$_h_lim"); then
+      # Named: a program over a shell (the agent, not its launcher),
+      # then the most recently active.
+      _h_sh=; printf '%s\n' "$_h_cm" | grep -Eq "$CU_SHELLS" && _h_sh=1
+      case $CU_IDLE_BY in
+        -) CU_IDLE_BY=$_h_cm:$_h_pid:$_h_q _h_bsh=$_h_sh ;;
+        *) if [ -n "$_h_bsh" ] && [ -z "$_h_sh" ]; then
+             CU_IDLE_BY=$_h_cm:$_h_pid:$_h_q _h_bsh=
+           elif [ "$_h_sh" = "$_h_bsh" ] \
+             && [ "$_h_q" -lt "${CU_IDLE_BY##*:}" ]; then
+             CU_IDLE_BY=$_h_cm:$_h_pid:$_h_q
+           fi ;;
+      esac
+    else
+      _h_live="$_h_live$_h_pid$_h_tab$_h_cm
+"
+    fi
+  done <<HOLDERS
+$_h_all
+HOLDERS
+  [ -n "$_h_live" ] || return 0
+  CU_INUSE_BY=$(printf '%s' "$_h_live" | awk -F '\t' -v sh="$CU_SHELLS" '
+    NF { if (!got || (best ~ sh && $2 !~ sh)) { best = $2; pid = $1; got = 1 } }
+    END { if (got) print best ":" pid }')
+}
+
 # _cu_busy <path>: is a git operation open in it?
 _cu_busy() {
   for _y_f in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG \
@@ -234,18 +328,18 @@ NEW
 _cu_sync_pull() {
   if _cu_busy "$1"; then CU_RESULT=busy; return 0; fi
   if [ -z "${CU_CWDS_OK:-}" ]; then CU_RESULT=unseen; return 0; fi
-  _q_r=$(_sv_resolve "$1")
   # WHO, not just whether (agreed with the user, 2026-10-05): the
   # decline names a program, preferring one that is not a shell, since
-  # `claude` or `vim` says more than the shell that runs it.
-  CU_INUSE_BY=$(printf '%s\n' "$CU_CWDS" | awk -F '\t' -v r="$_q_r" \
-    -v sh="$CU_SHELLS" '$3 == r || index($3, r "/") == 1 {
-      if (!got || (best ~ sh && $2 !~ sh)) { best = $2; pid = $1; got = 1 } }
-    END { if (got) print best ":" pid }')
-  if [ -n "$CU_INUSE_BY" ]; then CU_RESULT=in-use; return 0; fi
-  CU_INUSE_BY=-
+  # `claude` or `vim` says more than the shell that runs it. An IDLE
+  # holder does not decline (above), but it is named in the record.
+  _cu_holders "$(_sv_resolve "$1")"
+  if [ "$CU_INUSE_BY" != - ]; then CU_RESULT=in-use; return 0; fi
   if _cu_touched "$1"; then CU_RESULT=touched; return 0; fi
   _cu_pull "$1"
+  if [ "$CU_IDLE_BY" != - ] && [ "$CU_RESULT" = ok ]; then
+    _q_p=${CU_IDLE_BY%%:*}
+    retro_tally "pulled-under-idle:$_q_p" "$(basename -- "$1")"
+  fi
 }
 
 # sync_main [--dry-run] [--porcelain] [name...]: catch-up's run, under
@@ -261,6 +355,7 @@ sync_main() {
 catchup_judge() {
   owed_judge "$@"
   CU_ACTION=none CU_RESULT=- CU_FROM=$SV_HEAD CU_TO=- CU_INUSE_BY=-
+  CU_IDLE_BY=-
   CU_OWED=$OW_LIST
   case ,$OW_LIST, in
     *,pull,*) if [ -n "${CU_SYNC:-}" ]; then _cu_sync_pull "$2"
@@ -288,8 +383,8 @@ catchup_record() {
     "$(_sv_short "$CU_TO")"
   printf ' owed=%s remaining=%s state=%s fetched=%s reseed_since=%s' \
     "$CU_OWED" "$CU_REMAINING" "$SV_STATE" "$SV_FETCHED" "$OW_RSINCE"
-  printf ' push_since=%s in_use_by=%s path=%s\n' "$OW_PSINCE" \
-    "$(_sv_esc "$CU_INUSE_BY")" "$(_sv_esc "$2")"
+  printf ' push_since=%s in_use_by=%s idle_by=%s path=%s\n' "$OW_PSINCE" \
+    "$(_sv_esc "$CU_INUSE_BY")" "$(_sv_esc "$CU_IDLE_BY")" "$(_sv_esc "$2")"
 }
 
 # _cu_render <porcelain|table|attention>: exits 1 unless every repo ends owing
@@ -329,13 +424,22 @@ _cu_render() {
       nm[n] = f["name"]; ac[n] = f["action"]; rs[n] = f["result"]
       if (f["in_use_by"] != "" && f["in_use_by"] != "-") {
         b = f["in_use_by"]; sub(/:[0-9]+$/, "", b); rs[n] = rs[n] ":" b }
+      # Pulled under an IDLE holder: said, so a later surprise in that
+      # session has its explanation here (M1).
+      if (f["idle_by"] != "" && f["idle_by"] != "-") {
+        split(f["idle_by"], ib, ":"); s = ib[3] + 0
+        a = s < 7200 ? int(s / 60) "m" : s < 172800 ? int(s / 3600) "h" : \
+          int(s / 86400) "d"
+        rs[n] = rs[n] " (idle " ib[1] " " a ")" }
+      if (length(rs[n]) > wr) wr = length(rs[n])
       fr[n] = f["from"]; to[n] = f["to"]; rm[n] = f["remaining"]
       if (length(nm[n]) > wn) wn = length(nm[n])
     }
     END {
       if ((mode == "table" || mode == "attention") && n > 0) {
         if (wn < 4) wn = 4
-        fmt = "%-" wn "s  %-6s  %-17s  %-12s  %-12s  %s\n"
+        if (wr < 17) wr = 17
+        fmt = "%-" wn "s  %-6s  %-" wr "s  %-12s  %-12s  %s\n"
         printf fmt, "REPO", "ACTION", "RESULT", "FROM", "TO", "REMAINING"
         for (i = 1; i <= n; i++)
           printf fmt, nm[i], ac[i], rs[i], fr[i], to[i], rm[i]
@@ -377,7 +481,8 @@ _cu_canon_first() {
       END { exit !f }' && continue
     catchup_judge canonical "$_p_top"
     CU_PRE="$CU_PRE$_p_key $CU_ACTION $CU_RESULT $(_sv_short "$CU_FROM")"
-    CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED $(_sv_esc "$CU_INUSE_BY")
+    CU_PRE="$CU_PRE $(_sv_short "$CU_TO") $CU_OWED $(_sv_esc "$CU_INUSE_BY")"
+    CU_PRE="$CU_PRE $(_sv_esc "$CU_IDLE_BY")
 "
   done < "$SV_CONFIG"
 }
@@ -392,14 +497,14 @@ _cu_set_record() {
   SV_DO_FETCH=
   owed_judge "$@"
   SV_DO_FETCH=$_s_fetch
-  # shellcheck disable=SC2086  # seven space-free fields, split on purpose
+  # shellcheck disable=SC2086  # eight space-free fields, split on purpose
   set -- "$1" "$2" $_s_pre
   printf 'name=%s action=%s result=%s from=%s to=%s owed=%s' \
     "$(_sv_esc "$1")" "$4" "$5" "$6" "$7" "$8"
   printf ' remaining=%s state=%s fetched=%s reseed_since=%s' \
     "$OW_LIST" "$SV_STATE" "$SV_FETCHED" "$OW_RSINCE"
-  printf ' push_since=%s in_use_by=%s path=%s\n' "$OW_PSINCE" "$9" \
-    "$(_sv_esc "$2")"
+  printf ' push_since=%s in_use_by=%s idle_by=%s path=%s\n' "$OW_PSINCE" \
+    "$9" "${10}" "$(_sv_esc "$2")"
 }
 
 catchup_main() {

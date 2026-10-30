@@ -268,6 +268,16 @@ nobody:
                 (`claude:11576`, a program preferred over the shell
                 running it), the table shows `in-use:claude`, and retro
                 tallies it, so a review can see what holds repos.
+                An IDLE process does not count either: one whose
+                terminal has had neither output nor input for
+                `idle-after` (default 1h) and that has no children, or
+                a shell whose children are all idle (an agent's own
+                launcher). A process with no terminal cannot be
+                measured, and holds. A pull under an idle holder says so:
+                `idle_by=claude:12380:81000` in the record, `ok (idle
+                claude 22h)` in the table, and a retro tally. Agents
+                restored at boot and never used held their repos for a
+                day before this; the gates below still apply to them.
       touched   a tracked file was saved after HEAD last moved (a pull,
                 commit or checkout), even if its content is back to what
                 it was. Ignored files do not count: a build is not a
@@ -757,6 +767,9 @@ required: see What it does).
                              the relpaths, AND one of the `requires`
                              paths when given (a repo with a hook of its
                              own has not adopted the vendored hook)
+    idle-after <age>         how long a holder of a repo may sit idle (a
+                             quiet terminal, no children) before it stops
+                             making the repo in-use (default 1h)
     push-grace <age>         how long an unpushed commit may wait before
                              it is attention (default 60m)
     reseed-grace <age>       how long a canonical change may wait for its
