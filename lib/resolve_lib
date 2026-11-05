@@ -30,6 +30,13 @@
 #
 # Exit: 0 nothing needs you, 1 something does, 2 a step could not run.
 
+# _rs_remedies <verdict> <dest> <source>: its remedies, under its line.
+_rs_remedies() {
+  _e_r=$(pl_remedies "$@" | sed 's/^/           /')
+  RS_NEED="$RS_NEED$_e_r
+"
+}
+
 _rs_need() {   # <kind> <words...>: one line on the "needs you" list
   _n_k=$1; shift
   RS_NEED="${RS_NEED}$(printf '%-10s %s' "$_n_k" "$*")
@@ -178,11 +185,11 @@ _rs_place_one() {
   case $2 in
     in-sync|app-held|unmanaged) ;;
     merge-back) _rs_need merge-back "$3: a live edit not yet in the" \
-      "source; review it (muster diff $3), then: muster merge-back $3" ;;
+      "source"; _rs_remedies "$2" "$3" "$4" ;;
     capture) _rs_need capture "$3: an application's file not yet in the" \
-      "source; review it (muster diff $3), then: muster capture $3" ;;
-    conflict) _rs_need conflict "$3: changed live AND in the source;" \
-      "decide which wins (muster diff $3)" ;;
+      "source"; _rs_remedies "$2" "$3" "$4" ;;
+    conflict) _rs_need conflict "$3: changed live AND in the source"
+      _rs_remedies "$2" "$3" "$4" ;;
     source-link) _rs_need "$2" "$3: its source is a symlink, never placed;" \
       "make it a file, or move it out of the root" ;;
     foreign|linked-dir) _rs_need "$2" "$3: a link to somewhere else, not" \
@@ -202,7 +209,8 @@ _rs_place_needs() {
   while IFS= read -r _p_rec; do
     [ -n "$_p_rec" ] || continue
     _rs_place_one "$1" "$(_st_field "$_p_rec" verdict)" \
-      "$(_st_unesc "$(_st_field "$_p_rec" path)")"
+      "$(_st_unesc "$(_st_field "$_p_rec" path)")" \
+      "$(_st_unesc "$(_st_field "$_p_rec" source)")"
   done <<RECORDS
 $_p_out
 RECORDS
@@ -272,7 +280,7 @@ resolve_main() {
   fi
   if [ -n "$RS_NEED" ]; then
     printf '\n== needs you (%s)\n%s' \
-      "$(printf '%s' "$RS_NEED" | grep -c .)" "$RS_NEED"
+      "$(printf '%s' "$RS_NEED" | grep -c '^[^ ]')" "$RS_NEED"
   else
     printf '\n== nothing needs you\n'
   fi

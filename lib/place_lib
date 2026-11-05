@@ -826,6 +826,33 @@ _pl_durable() {
   return 1
 }
 
+# THE MERGE-BACK HOOK (agreed with the user, 2026-11-05): muster never
+# commits (P5). It runs ONE command the integrator names, after a
+# merge-back or capture that landed, with the source file and its repo's
+# root, so committing (and pushing) is the integrator's policy, not
+# muster's. 0 done, 1 declined (the change stays in the working tree),
+# anything else a failure said loudly; the merge-back stands either way.
+pl_hook() { _sv_cfg_all merge-back-hook | head -n 1; }
+
+# _pl_hook <source file>: run it, when one is configured.
+_pl_hook() {
+  _k_h=$(pl_hook)
+  [ -n "$_k_h" ] || return 0
+  _k_root=$(git -C "$(dirname -- "$1")" rev-parse --show-toplevel \
+    2>/dev/null) || _k_root=-
+  _k_rc=0
+  "$_k_h" "$1" "$_k_root" </dev/null || _k_rc=$?
+  case $_k_rc in
+    0) printf 'hook       %s: done (%s)\n' "$1" "$_k_h" ;;
+    1) printf 'hook       %s: declined; it stays uncommitted in %s\n' \
+         "$1" "$_k_root" ;;
+    *) printf 'FAILED     merge-back-hook %s (exit %s) for %s; the change' \
+         "$_k_h" "$_k_rc" "$1"
+       printf ' stands, uncommitted in %s\n' "$_k_root"
+       echo x >> "$PL_FAILS" ;;
+  esac
+}
+
 # _pl_merge_cb: P5. Into the source WORKING TREE only, never committing,
 # and never into a source file git reports as modified (someone mid-edit).
 _pl_merge_cb() {
@@ -841,6 +868,7 @@ _pl_merge_cb() {
     && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"; then
     printf 'merged     %s -> %s\n' "$PL_D" "$PL_S"
     retro_event merged-back "$PL_D"
+    _pl_hook "$PL_S"
   else printf 'FAILED     merge-back %s\n' "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
@@ -949,6 +977,7 @@ _pl_capture_cb() {
     && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"; then
     printf 'captured   %s -> %s\n' "$PL_D" "$PL_S"
     retro_event captured "$PL_D"
+    _pl_hook "$PL_S"
   else printf 'FAILED     capture %s\n' "$PL_D"; echo x >> "$PL_FAILS"
   fi
 }
@@ -1193,8 +1222,12 @@ _pl_retire_cb() {
 }
 
 # placement_displaced: "<run> <absolute path>" for every kept edit (P4).
-placement_displaced() {
-  _z_root=$(_pl_state)/displaced
+placement_displaced() { placement_kept displaced; }
+
+# placement_kept <displaced|restored>: "<run> <absolute path>" for every
+# copy kept in that store, oldest run first.
+placement_kept() {
+  _z_root=$(_pl_state)/$1
   [ -d "$_z_root" ] || return 0
   (cd "$_z_root" && find . -type f ! -name "*$PL_TMP.*") \
     | sed 's|^\./||' | sort | while IFS= read -r _z_e; do
@@ -1202,23 +1235,30 @@ placement_displaced() {
     done
 }
 
-# displaced_main [list | clear <run> <path> ... | clear --all]: the kept
+displaced_main() { _pl_kept_main displaced "$@"; }
+restored_main() { _pl_kept_main restored "$@"; }
+
+# _pl_kept_main <store> [list | clear <run> <path> ... | clear --all]: the
+# copies kept in a store, displaced (a repo-owned edit place set aside: a
+# fault until cleared) or restored (an edit YOU dropped: kept 30 days, never
+# a fault).
 # edits. Clearing is a person's decision, after review (P4), so nothing
 # here clears on its own and `clear` names exactly what it removes.
-displaced_main() {
+_pl_kept_main() {
+  _c_store=$1; shift
   survey_config || return 2
-  _c_root=$(_pl_state)/displaced
+  _c_root=$(_pl_state)/$_c_store
   case ${1:-list} in
-    list) placement_displaced; return 0 ;;
+    list) placement_kept "$_c_store"; return 0 ;;
     clear) shift ;;
-    *) echo "usage: muster displaced [list | clear <run> <path>..." \
+    *) echo "usage: muster $_c_store [list | clear <run> <path>..." \
          "| clear --all]" >&2; return 2 ;;
   esac
   if [ "${1:-}" = --all ]; then
     [ "$#" = 1 ] || { echo "muster: clear --all takes nothing else" >&2
       return 2; }
     # Line by line, never word-split: a displaced path may hold a space.
-    placement_displaced | while read -r _c_run _c_path; do
+    placement_kept "$_c_store" | while read -r _c_run _c_path; do
       _pl_drop "$_c_root/$_c_run$_c_path" "$_c_root" \
         && printf 'cleared    %s (%s)\n' "$_c_path" "$_c_run"
     done
@@ -1229,9 +1269,121 @@ displaced_main() {
   while [ "$#" -gt 0 ]; do
     case $1 in */*|.*|'') echo "muster: bad run '$1'" >&2; return 2 ;; esac
     _c_f=$_c_root/$1$2
-    [ -f "$_c_f" ] || { echo "muster: no displaced $2 in run $1" >&2
+    [ -f "$_c_f" ] || { echo "muster: no $_c_store $2 in run $1" >&2
       return 2; }
     _pl_drop "$_c_f" "$_c_root" && printf 'cleared    %s (%s)\n' "$2" "$1"
     shift 2
   done
+}
+
+# pl_remedies <verdict> <dest> <source>: what a person can do about a live
+# edit, one remedy a line (agreed with the user, 2026-11-05: "call out the
+# drift and offer up two options"). One writer, so check and resolve can
+# never advise differently, and the "keep it" line says what THIS box's
+# config will do (a hook commits, or the person does).
+pl_remedies() {
+  printf 'see it:   muster diff %s\n' "$2"
+  case $1 in
+    merge-back|capture)
+      if ! pl_in_worktree "$3"; then
+        printf 'keep it:  make the edit upstream (%s is in no git work' "$3"
+        printf ' tree)\n'
+      elif [ -n "$(pl_hook)" ]; then
+        printf 'keep it:  muster %s %s   (the merge-back hook commits it)\n' \
+          "$1" "$2"
+      else
+        printf 'keep it:  muster %s %s   (then commit it in %s)\n' "$1" \
+          "$2" "$(_pl_repo_of "$3")"
+      fi ;;
+    conflict)
+      printf 'keep it:  merge it into %s by hand, then muster place %s\n' \
+        "$3" "$2" ;;
+  esac
+  printf 'drop it:  muster restore %s   (your edit is kept %s days)\n' \
+    "$2" "$PL_RESTORE_DAYS"
+}
+
+# _pl_repo_of <file>: the work tree holding it, asked of the nearest
+# directory that exists; the file itself if none answers.
+_pl_repo_of() {
+  _o_d=$(dirname -- "$1")
+  while [ ! -d "$_o_d" ]; do _o_d=$(dirname -- "$_o_d"); done
+  git -C "$_o_d" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1"
+}
+
+# === restore: put the SOURCE back over a live edit (2026-11-05) ===========
+# The other remedy for a live edit, beside merge-back: drop it. Agreed with
+# the user. No edit is lost under any policy (P4), so the live copy is kept
+# first, verified, in <state>/restored/<run>/<path>, which is NEVER a fault
+# (a person chose this) and is pruned after PL_RESTORE_DAYS. A live edit
+# only: merge-back, conflict, capture, displace. Paths must be named.
+PL_RESTORE_DAYS=30
+
+restore_main() {
+  PL_DRY=
+  case ${1:-} in --dry-run) PL_DRY=1; shift ;; esac
+  case ${1:-} in
+    -*|'') echo "usage: muster restore [--dry-run] <path>..." >&2; return 2 ;;
+  esac
+  survey_config || return 2
+  [ -n "$(_pl_roots)" ] || { echo "muster: no \`place\` roots declared" >&2
+    return 2; }
+  PL_RUN=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  PL_FAILS=$(_pl_state)/.place-fails.$$ PL_HITS=$PL_FAILS.hits
+  mkdir -p "$(_pl_state)" && : > "$PL_FAILS" && : > "$PL_HITS" || return 2
+  [ -n "$PL_DRY" ] || pl_prune_restored
+  _pl_walk _pl_restore_cb "$@"
+  _r_n=$(wc -l < "$PL_HITS" | tr -d ' ')
+  _r_f=$(wc -l < "$PL_FAILS" | tr -d ' ')
+  rm -f -- "$PL_FAILS" "$PL_HITS"
+  [ "$_r_n" != 0 ] || { echo "muster: no managed file under: $*" >&2
+    return 2; }
+  [ "$_r_f" = 0 ] || return 2
+}
+
+# _pl_restore_cb: one file named by restore.
+_pl_restore_cb() {
+  echo x >> "$PL_HITS"
+  case $PL_V in
+    merge-back|conflict|capture|displace) ;;
+    in-sync|converged) printf 'nothing    %s: %s, no live edit\n' \
+        "$PL_D" "$PL_V"; return 0 ;;
+    *) printf 'refused    %s: %s, not a live edit to restore\n' \
+         "$PL_D" "$PL_V"; return 0 ;;
+  esac
+  if ! _pl_writable "$PL_D"; then
+    printf 'read-only  %s: not writable by this user\n' "$PL_D"
+    echo x >> "$PL_FAILS"; return 0
+  fi
+  _t_keep=$(_pl_state)/restored/$PL_RUN$PL_D
+  if [ -n "$PL_DRY" ]; then
+    printf 'would restore %s (the edit kept in %s)\n' "$PL_D" "$_t_keep"
+    return 0
+  fi
+  if [ -f "$PL_D" ] && ! _pl_put "$PL_D" "$_t_keep"; then
+    printf 'FAILED     restore %s: could not keep the edit; nothing changed\n' \
+      "$PL_D"; echo x >> "$PL_FAILS"; return 0
+  fi
+  if [ -f "$PL_S" ]; then
+    _pl_put "$PL_S" "$PL_D" && _pl_put "$PL_S" "$PL_M" \
+      && _pl_layer_set "$PL_D" "$PL_SR" "$PL_RP"
+  else   # an application's new file: no source to put back
+    _pl_drop "$PL_D" "$PL_DR" \
+      && { [ ! -f "$PL_M" ] || _pl_drop "$PL_M" "$(_pl_state)/root"; }
+  fi || { printf 'FAILED     restore %s (the edit is kept in %s)\n' \
+    "$PL_D" "$_t_keep"; echo x >> "$PL_FAILS"; return 0; }
+  printf 'restored   %s (your edit is kept %sd: %s)\n' "$PL_D" \
+    "$PL_RESTORE_DAYS" "$_t_keep"
+  retro_event restored "$PL_D"
+}
+
+# pl_prune_restored: drop restored copies older than PL_RESTORE_DAYS, file
+# by file and then empty directories: never rm -r on a variable.
+pl_prune_restored() {
+  _u_r=$(_pl_state)/restored
+  [ -d "$_u_r" ] || return 0
+  find "$_u_r" -type f -mtime +"$PL_RESTORE_DAYS" -exec rm -f {} + \
+    2>/dev/null || :
+  find "$_u_r" -mindepth 1 -depth -type d -empty -exec rmdir {} + \
+    2>/dev/null || :
 }

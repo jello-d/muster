@@ -454,6 +454,42 @@ baseline with no recorded layer that no layer supplies is `unlayered`
 The integrator changes its layers only after one `place` has run under
 the old config on each box, which the note lets it verify.
 
+### P15. A live edit names both remedies (AGREED, BUILT 2026-11-05)
+
+From the user: "i suspect i'll naturally make changes to files in the FS",
+so a live edit should come with both ways out, "run X to repave over it,
+or run Y to codify it". A tool that names a problem without its remedy
+invites two people to close it two different ways.
+
+MUST BE TRUE:
+
+- `check` and `resolve` print, under each live-edit finding (merge-back,
+  capture, conflict), `see it` (`muster diff`), `keep it` and `drop it`,
+  from ONE writer (`pl_remedies`), so the two can never advise apart. The
+  finding's own line is unchanged, and the banner store carries none of
+  the remedy lines.
+- `keep it` says what THIS box does: with `merge-back-hook` declared, the
+  hook commits it; without, the person commits it, in the repo named.
+  A conflict cannot be merged back: its `keep it` is a hand merge.
+- `muster restore <path>...` is the repave. It keeps the live copy first,
+  verified (P4 holds: no edit is lost), in `<state>/restored/<run>/`, which
+  is NEVER a fault (a person chose it) and is pruned after 30 days by
+  restore and by every run. Paths must be named. Only a live edit is
+  restored; an in-sync file says so, anything else is refused.
+- `merge-back-hook <absolute command>` (a path line) runs after a
+  merge-back or capture lands, with the source file and its repo's root.
+  muster still never commits (P5): committing, and pushing, are the
+  integrator's policy in the hook. Exit 0 done, 1 declined (left in the
+  work tree, and said), other: a failure, said, and merge-back exits 2;
+  the write stands either way.
+
+FOR THE INTEGRATOR'S HOOK (T19 in its requests file): commit NARROWLY
+(that one path) and push NARROWLY (only what the hook committed), ideally
+from a SANDBOX (a throwaway worktree off a fresh origin) so nothing else
+can ride along and concurrent unpushed work cannot block the push; then
+hand the main checkout's merge-back copy back to git, or sync will see a
+touched file and decline to pull the very commit that carries it.
+
 ## The config format: FROZEN for the first increment (2026-10-01)
 
 What an integrator writes, and what it may rely on. Any change is
@@ -477,6 +513,8 @@ nothing below changes meaning under a config that already parses.
   Nesting is allowed: the MOST SPECIFIC root owns its subtree, and a
   source file of an outer root that lands inside an inner root is
   `shadowed` (a fault, never acted on).
+- ADDED 2026-11-05 (P15, additive): `merge-back-hook <absolute path>`,
+  once, a path line.
 - ADDED 2026-10-01 (increment 2, additive, agreed with the user):
   `capture <dest-dir>`, one directory, under some declared `<dest-root>`,
   once; see P10.

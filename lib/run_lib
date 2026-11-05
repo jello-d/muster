@@ -554,6 +554,7 @@ _rn_config_store() { printf '%s/config.faults' "$(_rn_state_dir)"; }
 # cannot be read, the previous store is LEFT, never replaced by an empty
 # one: "no faults" from a read that failed would be a silent all-clear.
 _rn_config_scan() {
+  pl_prune_restored
   _cs_f=$(_rn_config_store)
   if [ -z "$(_pl_roots)" ]; then rm -f "$_cs_f"; return 0; fi
   _cs_all=$(placement_findings 2>/dev/null) || return 0

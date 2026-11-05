@@ -181,6 +181,12 @@ commands:
          and declined, what needed you and for how long, and the unusual
          events, kept for a rolling year. `muster retro help` lists its
          commands (show, events, tally, status, done)
+  restore [--dry-run] <path>...
+         drop a live edit: put the source version back. The edit is
+         kept first (muster restored lists it) for 30 days, never a
+         fault. The other remedy is merge-back, which keeps it
+  restored [list | clear <run> <path>... | clear --all]
+         the edits restore kept, with their runs
   flag-holds <flag>
          is a flag muster raised still needed? For the notifier's
          recheck: 0 still needed, 1 resolved, 2 cannot say. Reads the
@@ -217,6 +223,8 @@ case ${1:-} in
   where) shift; where_main "$@" ;;
   retire) shift; retire_main "$@" ;;
   displaced) shift; displaced_main "$@" ;;
+  restore) shift; restore_main "$@" ;;
+  restored) shift; restored_main "$@" ;;
   flag-holds) shift; flag_holds_main "$@" ;;
   retro) shift; retro_main "$@" ;;
   help|-h|--help) usage ;;

@@ -658,6 +658,25 @@ stored. The commands:
     muster where <path>                      source <-> destination
     muster diff [path...]                    what changed on each side
     muster displaced [list | clear ...]      repo-owned edits kept aside
+    muster restore [--dry-run] <path>...     drop a live edit: the source
+                                             back, the edit kept 30 days
+    muster restored [list | clear ...]       the edits restore kept
+
+A LIVE EDIT HAS TWO REMEDIES, and `check` and `resolve` name both under
+the finding, worded for this box:
+
+    fault  merge-back ~/bin/wl: a live edit not yet in the source; ...
+             see it:   muster diff ~/bin/wl
+             keep it:  muster merge-back ~/bin/wl   (then commit it in ...)
+             drop it:  muster restore ~/bin/wl   (your edit is kept 30 days)
+
+`restore` paves at once; the copy it keeps first (under
+`<state>/restored/`) is an undo, never a fault, pruned after 30 days.
+`merge-back-hook <absolute path>` names a command run after a merge-back
+or capture lands, with the source file and its repo root: the
+integrator's commit (and push). muster never commits; 0 done, 1 declined
+(the change stays in the work tree), anything else a loud failure of the
+merge-back, whose write stands.
     muster retire [--dry-run] <layer-source|unrecorded>
                                              remove one undeclared layer
 

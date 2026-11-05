@@ -387,6 +387,10 @@ survey_record() {
 #   idle-after <age>         a process holding a repo stops making it
 #                            in-use once it has no children and its
 #                            terminal has been quiet this long; 1h
+#   merge-back-hook <abs>    run after a merge-back or capture lands,
+#                            with the source file and its repo root:
+#                            the integrator's commit (and push); muster
+#                            never commits. 0 done, 1 declined
 #   place-grace <age>        how long a placed file may sit freshly
 #                            changed (drift, or a live edit owing a
 #                            merge-back) before it is attention; 60m
@@ -471,7 +475,7 @@ sv_manage_kind() {
   case $1 in
     root|origin|repo|deployed|artifact|expect|hold|push-grace|idle-after|\
     reseed-grace) echo repo ;;
-    place|policy|capture|place-grace) echo path ;;
+    place|policy|capture|place-grace|merge-back-hook) echo path ;;
     profile) sv_verb_kind "${2:-}" ;;
   esac
 }
@@ -481,7 +485,8 @@ sv_manage_kind() {
 sv_verb_kind() {
   case $1 in
     survey|owed|catch-up|sync|push|stamp) echo repo ;;
-    placed|place|merge-back|capture|diff|where|displaced|retire) echo path ;;
+    placed|place|merge-back|capture|diff|where|displaced|retire|restore|\
+    restored) echo path ;;
   esac
 }
 
@@ -554,6 +559,10 @@ _sv_cfg_lines() {
         [ -n "$_k_a" ] \
           && case " $PL_POLICIES " in *" $_k_b "*) true ;; *) false ;; esac \
           && continue ;;
+      merge-back-hook)
+        _k_mbh=$((${_k_mbh:-0} + 1))
+        case $_k_a in /*) [ -z "$_k_b" ] && [ "$_k_mbh" = 1 ] && continue ;;
+        esac ;;
       notify)
         _k_ntf=$((${_k_ntf:-0} + 1))
         [ -n "$_k_a" ] && [ -z "$_k_b" ] && [ "$_k_ntf" = 1 ] && continue ;;

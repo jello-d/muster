@@ -34,6 +34,7 @@ RT_KINDS='action pulled
 action rebased
 action pushed
 action merged-back
+action restored
 action captured
 episode needed-you
 episode settled

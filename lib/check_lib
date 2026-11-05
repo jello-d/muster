@@ -35,6 +35,16 @@ _ck_add() {   # <fault|drift|note> <words of the line...>
   esac
 }
 
+_ck_more() {   # <fault|drift|note> <text>: a line under the last one
+  _m_l="         $2
+"
+  case $1 in
+    fault) CK_FAULT="$CK_FAULT$_m_l" ;;
+    drift) CK_DRIFT="$CK_DRIFT$_m_l" ;;
+    note) CK_NOTE="$CK_NOTE$_m_l" ;;
+  esac
+}
+
 # _ck_literal_missing <name>: the literal is not a repo on this box.
 _ck_literal_missing() {
   _l_path=$(_sv_cfg repo "$1") || _l_path=$SV_ROOT/$1
@@ -266,6 +276,7 @@ placement_findings() {
         echo "note place      $_g_v $_g_p: changed" \
           "$(( ($(date +%s) - _g_s) / 60 ))m ago; needs you once" \
           "unchanged for place-grace"
+        _ck_hints "$_g_v" "$_g_p" "$_g_r"
         continue
       fi ;;
     esac
@@ -307,6 +318,9 @@ placement_findings() {
         "so there is no one place to capture it to" ;;
       *) echo "fault place      $_g_v $_g_p" ;;
     esac
+    case $_g_v in merge-back|capture|conflict)
+      _ck_hints "$_g_v" "$_g_p" "$_g_r" ;;
+    esac
   done <<RECORDS
 $_g_recs
 RECORDS
@@ -320,11 +334,23 @@ RECORDS
   done
 }
 
-# _ck_placement: the findings above, into check's lists.
+# _ck_hints <verdict> <dest> <record>: a live edit's remedies, as `hint`
+# lines under its finding (pl_remedies). Banner stores read only `fault`
+# lines, so the hints reach people and no parser.
+_ck_hints() {
+  pl_remedies "$1" "$2" "$(_st_unesc "$(_st_field "$3" source)")" \
+    | sed 's/^/hint /'
+}
+
+# _ck_placement: the findings above, into check's lists; a `hint` line
+# goes under the finding before it.
 _ck_placement() {
   _g_all=$(placement_findings)
+  _g_last=note
   while read -r _g_k _g_t; do
     [ -n "$_g_k" ] || continue
+    if [ "$_g_k" = hint ]; then _ck_more "$_g_last" "$_g_t"; continue; fi
+    _g_last=$_g_k
     _ck_add "$_g_k" "$_g_t"
   done <<FINDINGS
 $_g_all
