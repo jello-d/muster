@@ -215,12 +215,22 @@ look; a conflicted one needs a human.
 
 ### P7. Mode is part of the file
 
-MUST BE TRUE: the baseline carries the file's mode, the comparison
-includes it, and placing reproduces it. A mode-only change is drift like
-any other.
+MUST BE TRUE: the baseline carries the file's mode and placing
+reproduces it. The comparison includes the EXECUTE bits: an execute-bit
+change, on either side, is drift like any content change.
 
 WHY: the user: "modes in the tree will solve a lot of churn previously
 wrangled with". And chezmoi dropped an executable bit.
+
+NARROWED TO THE EXECUTE BITS (tackup request M2, 2026-11-11). git versions
+only the execute bit, so a source file's other mode bits are the umask its
+checkout ran under: 664 on one box, 644 on another. An app that rewrites a
+placed file under its own umask (hwdp's kanshi profiles land 600, a desktop
+tool's mimeapps.list 664) then changed only those bits, with the content
+byte-identical, and the box read a merge-back or conflict FAULT that the
+other box, with a different checkout umask, read as in sync. Comparing
+bits nobody versions made the verdict depend on the box rather than the
+file.
 
 ### P8. Deletion intent comes from the source, and only from the source
 

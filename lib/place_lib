@@ -72,9 +72,22 @@ _pl_mode() {   # <file> -> permission bits, GNU or BSD stat
   stat -c %a -- "$1" 2>/dev/null || stat -f %Lp -- "$1" 2>/dev/null
 }
 
-# _pl_same <a> <b>: same content AND same mode (P7: mode is part of it).
+# The EXECUTE bits of a file's mode, as a number. The only mode bits that
+# count as a difference (P7), because they are the only ones git versions: a
+# source file's other bits are whatever umask its checkout ran under (664 on
+# one box, 644 on another), and an app rewriting a placed file under its own
+# umask changes them with the content untouched. Judging those bits made a
+# byte-identical rewrite a merge-back FAULT on one box and in-sync on the
+# other (tackup M2, dragonfly 2026-11-11). place still COPIES the whole mode.
+_pl_xbits() {   # <file>
+  _x_m=$(_pl_mode "$1") || return 1
+  [ -n "$_x_m" ] || return 1
+  printf '%s\n' "$(( 0$_x_m & 0111 ))"
+}
+
+# _pl_same <a> <b>: same content AND same execute bits (P7).
 _pl_same() {
-  cmp -s -- "$1" "$2" && [ "$(_pl_mode "$1")" = "$(_pl_mode "$2")" ]
+  cmp -s -- "$1" "$2" && [ "$(_pl_xbits "$1")" = "$(_pl_xbits "$2")" ]
 }
 
 # _pl_roots: "<source-root> <dest-root> <policy>" per `place` line,
@@ -1054,8 +1067,12 @@ _pl_diff_one() {
   _o_ml=$(_pl_mode "$_o_live")
   _o_mode=
   if [ "$_o_base" != /dev/null ]; then
-    if { [ "$_o_src" != /dev/null ] && [ "$_o_mb" != "$_o_ms" ]; } \
-      || { [ "$_o_live" != /dev/null ] && [ "$_o_mb" != "$_o_ml" ]; }; then
+    # Execute bits only, as _pl_same judges them, so diff never shows a mode
+    # line for a file the verdict calls in sync.
+    _o_xb=$(_pl_xbits "$_o_base") _o_xs=$(_pl_xbits "$_o_src")
+    _o_xl=$(_pl_xbits "$_o_live")
+    if { [ "$_o_src" != /dev/null ] && [ "$_o_xb" != "$_o_xs" ]; } \
+      || { [ "$_o_live" != /dev/null ] && [ "$_o_xb" != "$_o_xl" ]; }; then
       _o_mode="mode       last placed $_o_mb, source $_o_ms, live $_o_ml"
     fi
   fi

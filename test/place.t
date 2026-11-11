@@ -106,14 +106,27 @@ expect_rc 0 "idempotent"
 
 # === source changed, live untouched: place ===================================
 echo 'app a v2' > "$SRC/app/a.conf"
-chmod 600 "$SRC/app/b.conf"
+chmod 755 "$SRC/app/b.conf"
 pl
 expv "$DST/app/a.conf" place
 expv "$DST/app/b.conf" place
-assert "a mode-only change is drift (P7)" test "$RC" = 1
+assert "an execute-bit change is drift (P7)" test "$RC" = 1
 act place
 assert "place: the new content landed" same "$SRC/app/a.conf" "$DST/app/a.conf"
-assert "place: the new mode landed" test "$(mode "$DST/app/b.conf")" = 600
+assert "place: the new mode landed" test "$(mode "$DST/app/b.conf")" = 755
+# A NON-EXECUTE bit is not versioned by git, so it is not a difference (M2):
+# a checkout under another umask, or an app rewriting under its own, changes
+# only those bits. In sync on both sides, and place does not rewrite it.
+chmod 775 "$SRC/app/b.conf"
+pl
+expv "$DST/app/b.conf" in-sync
+chmod 757 "$DST/app/b.conf"
+pl
+expv "$DST/app/b.conf" in-sync
+act diff "$DST/app/b.conf"
+assert "diff: no mode line for bits the verdict ignores" \
+  test -z "$(printf '%s\n' "$OUT" | grep '^mode ')"
+chmod 755 "$SRC/app/b.conf" "$DST/app/b.conf"
 assert "place: the baseline followed" same "$SRC/app/a.conf" "$MIR/app/a.conf"
 g "$TK" add -A
 g "$TK" commit -m v2
