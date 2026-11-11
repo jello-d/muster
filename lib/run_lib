@@ -40,8 +40,10 @@
 # shellcheck disable=SC2034  # read by survey_lib's config check
 # `placed` and `place` are the PATH verbs (R12): a profile over every
 # placed path, so a box that only places has something on a timer. They
-# take no repo selectors. No profile verb merges back or captures, as no
-# profile verb pushes: those are a person's.
+# take no repo selectors. No profile verb merges back, as no profile verb
+# pushes: that is a person's. The ONE capture a profile can make is a
+# `place` profile meeting a `capture <dir> auto` directory, whose output the
+# integrator has pre-approved (M3); a plain capture stays a person's.
 RUN_VERBS='survey owed catch-up sync placed place'
 RUN_ACTING='catch-up sync place'
 # THE DRIVER WHEN NONE IS DECLARED: manual (agreed 2026-10-01), so a

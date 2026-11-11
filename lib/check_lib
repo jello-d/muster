@@ -269,6 +269,12 @@ placement_findings() {
     # A LIVE EDIT within place-grace is a note, not yet a fault: someone
     # may be mid-edit (agreed with the user, 2026-10-14). So it neither
     # fails check nor reaches the banner until the grace is out.
+    # PRE-APPROVED app output (`capture <dir> auto`) is drift that place
+    # repairs, never a person's step, so it neither waits nor faults.
+    if [ "$_g_v" = capture ] && pl_in_auto_capture "$_g_p"; then
+      echo "drift place      capture $_g_p (pre-approved; place takes it)"
+      continue
+    fi
     case $_g_v in merge-back|capture|conflict)
       _g_s=$(_st_field "$_g_r" since)
       if [ -n "$_g_s" ] && [ "$_g_s" != - ] \

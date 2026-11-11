@@ -167,6 +167,27 @@ _pl_owned_elsewhere() {   # <dest> <inner-roots>: under a more specific root?
 _pl_captures() { _sv_cfg_all capture | while IFS= read -r _a_c; do
   _sv_tilde "$_a_c" | sed 's|/*$||'; echo; done | grep . || :; }
 
+# _pl_auto_captures: the `capture <dir> auto` directories. AUTO means the
+# integrator has PRE-APPROVED whatever the application writes there (tackup
+# request M3, the user: "anything created by hwdp arrange is approved"), so
+# its output is captured by `place` like any other repair rather than
+# waiting for a person, and wins a conflict with the source.
+_pl_auto_captures() {
+  [ -e "$SV_CONFIG" ] || return 0
+  while read -r _u_kw _u_a _u_b || [ -n "$_u_kw" ]; do
+    [ "$_u_kw" = capture ] && [ "$_u_b" = auto ] || continue
+    _sv_tilde "$_u_a" | sed 's|/*$||'; echo
+  done < "$SV_CONFIG" | grep . || :
+}
+pl_in_auto_capture() {   # <dest>
+  _pl_auto_captures | (
+    while IFS= read -r _u_d; do
+      case $1 in "$_u_d"/*) exit 0 ;; esac
+    done
+    exit 1
+  )
+}
+
 _pl_in_capture() {   # <dest>: under a `capture` directory?
   _pl_captures | (
     while IFS= read -r _c_d; do
@@ -316,6 +337,10 @@ _pl_capture_v() {
   [ -n "$3" ] || { PL_V=missing; return 0; }
   _pl_three
   [ "$PL_V" != merge-back ] || PL_V=capture
+  # PRE-APPROVED: the app's file wins a conflict with the source.
+  if [ "$PL_V" = conflict ] && pl_in_auto_capture "$PL_D"; then
+    PL_V=capture
+  fi
 }
 
 # _pl_under_link <dest> <dest-root>: is any directory between the file
@@ -793,6 +818,10 @@ _pl_place_cb() {
       "$PL_D" "$PL_S"; return 0
   fi
   _pl_drift_verdict "$PL_V" || return 0
+  # An AUTO capture directory's work is pre-approved: place takes it.
+  if [ "$PL_V" = capture ] && pl_in_auto_capture "$PL_D"; then
+    _pl_capture_cb; return
+  fi
   case $PL_V in merge-back|capture) return 0 ;; esac
   if [ "$PL_V" = migrate-dir ]; then _pl_migrate_cb; return; fi
   if ! _pl_writable "$PL_D"; then

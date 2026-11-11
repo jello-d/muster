@@ -629,6 +629,47 @@ printf 'place %s %s user-editable\ncapture %s/x\ncapture %s/x/\n' \
   "$SRC" "$DST" "$DST" "$DST" > "$_T/capbad"
 OUT=$(MUSTER_CONFIG=$_T/capbad "$MUSTER" placed 2>&1); RC=$?
 expect_rc 2 "two capture lines for one directory: refused"
+printf 'place %s %s user-editable\ncapture %s/x maybe\n' \
+  "$SRC" "$DST" "$DST" > "$_T/capbad"
+OUT=$(MUSTER_CONFIG=$_T/capbad "$MUSTER" placed 2>&1); RC=$?
+expect_rc 2 "a capture line with an unknown second word: refused"
+
+# === `capture <dir> auto`: the app's output is PRE-APPROVED (tackup M3) ======
+# The user: anything hwdp writes is approved. So place captures it, check
+# calls it drift (never a fault), and the app wins a conflict.
+mkdir -p "$SRC/kauto"
+echo 'auto one' > "$SRC/kauto/a1.conf"
+g "$TK" add -A; g "$TK" commit -m kauto
+printf 'capture %s/kauto auto\n' "$DST" >> "$MUSTER_CONFIG"
+act place
+assert "auto capture dir: seeded from source" same "$SRC/kauto/a1.conf" \
+  "$DST/kauto/a1.conf"
+echo 'auto new by the app' > "$DST/kauto/a2.conf"
+echo 'auto one, rearranged' > "$DST/kauto/a1.conf"
+OUT=$("$MUSTER" check 2>&1); RC=$?
+assert "check: a pre-approved capture is drift, not a fault" \
+  has "$OUT" "drift  place      capture $DST/kauto/a2.conf"
+assert "check: and not reported as a fault" \
+  lacks "$OUT" "fault  capture    $DST/kauto/"
+act place
+assert "place captures the app's NEW file" same "$DST/kauto/a2.conf" \
+  "$SRC/kauto/a2.conf"
+assert "place captures the app's CHANGE" same "$DST/kauto/a1.conf" \
+  "$SRC/kauto/a1.conf"
+g "$TK" add -A; g "$TK" commit -m kauto-captured
+# Both sides changed: in an auto directory the app wins.
+echo 'source side' > "$SRC/kauto/a1.conf"
+g "$TK" add -A; g "$TK" commit -m kauto-src
+echo 'app side' > "$DST/kauto/a1.conf"
+act place
+assert "auto: the app wins a conflict" \
+  test "$(cat "$SRC/kauto/a1.conf")" = 'app side'
+g "$TK" add -A; g "$TK" commit -m kauto-conflict
+# A plain capture directory is unchanged: still a person's step.
+echo 'plain app edit' > "$DST/klink/k1.conf"
+act place
+assert "a plain capture dir is still never taken by place" \
+  test "$(cat "$SRC/klink/k1.conf")" = k1
 
 # A live file muster never placed, differing from source: not ours to take.
 echo 'pre-existing' > "$SRC/app/pre.conf"

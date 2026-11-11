@@ -525,6 +525,14 @@ nothing below changes meaning under a config that already parses.
   `shadowed` (a fault, never acted on).
 - ADDED 2026-11-05 (P15, additive): `merge-back-hook <absolute path>`,
   once, a path line.
+- ADDED 2026-11-11 (tackup M3, additive, agreed with the user):
+  `capture <dest-dir> auto`. The application's output there is
+  PRE-APPROVED: `place` captures it (new and changed files; the app wins a
+  conflict with the source, and a source file git reports modified is
+  still skipped), `check` reports it as drift rather than a fault, and the
+  merge-back hook commits it as for any capture. A plain `capture` line is
+  unchanged: still a person's step. The user, of hwdp's display layouts:
+  "anything created by hwdp arrange is approved".
 - ADDED 2026-10-01 (increment 2, additive, agreed with the user):
   `capture <dest-dir>`, one directory, under some declared `<dest-root>`,
   once; see P10.

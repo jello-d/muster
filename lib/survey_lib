@@ -368,10 +368,13 @@ survey_record() {
 #                            name. None: the whole set
 #   place <source-root> <dest-root> <policy>
 #   policy <dest-path> <policy>
-#   capture <dest-dir>       a directory an APPLICATION writes into (new
+#   capture <dest-dir> [auto]  a directory an APPLICATION writes into (new
 #                            files, changes): its files are app-owned, and
 #                            what the app wrote is a `capture` verdict,
-#                            folded into the source by `muster capture`
+#                            folded into the source by `muster capture`.
+#                            `auto`: the app's output is pre-approved, so
+#                            `place` captures it (app wins a conflict) and
+#                            check calls it drift, never a fault
 #                            config placed as COPIES (place_lib, and
 #                            docs/placement.md); policy is user-editable,
 #                            repo-owned or app-owned
@@ -554,7 +557,8 @@ _sv_cfg_lines() {
         [ -n "$_k_a" ] && [ "$#" = 2 ] \
           && case " $PL_POLICIES " in *" $2 "*) true ;; *) false ;; esac \
           && continue ;;
-      capture) [ -n "$_k_a" ] && [ -z "$_k_b" ] && continue ;;
+      capture) [ -n "$_k_a" ] \
+          && { [ -z "$_k_b" ] || [ "$_k_b" = auto ]; } && continue ;;
       policy)
         [ -n "$_k_a" ] \
           && case " $PL_POLICIES " in *" $_k_b "*) true ;; *) false ;; esac \
