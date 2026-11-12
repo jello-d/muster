@@ -665,6 +665,14 @@ act place
 assert "auto: the app wins a conflict" \
   test "$(cat "$SRC/kauto/a1.conf")" = 'app side'
 g "$TK" add -A; g "$TK" commit -m kauto-conflict
+# REMOVED FROM THE SOURCE: the live copy goes too, or the next walk would
+# read it as the app's new work and capture it straight back.
+g "$TK" rm -q "$SRC/kauto/a2.conf"; g "$TK" commit -q -m kauto-drop
+act place
+assert "auto: a file dropped from the source is removed live" \
+  test ! -e "$DST/kauto/a2.conf"
+act place
+assert "auto: and it is not captured back" test ! -e "$SRC/kauto/a2.conf"
 # A plain capture directory is unchanged: still a person's step.
 echo 'plain app edit' > "$DST/klink/k1.conf"
 act place

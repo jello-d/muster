@@ -564,7 +564,14 @@ _pl_act_one() {
       fi ;;
     orphan)
       # app-owned: the live file is the application's; forget it only.
-      if [ "$PL_POL" != app-owned ] && [ -e "$PL_D" ]; then
+      # EXCEPT in an AUTO capture directory, where a forgotten live file is
+      # read next walk as the app's NEW work and captured straight back:
+      # the repo's deletion would never stick (manifold, 2026-11-11, three
+      # dropped layouts re-captured within the minute). An orphan here is
+      # untouched since it was placed (a changed one is a conflict), so
+      # removing it loses nothing; the app writes it again if it means to.
+      if [ -e "$PL_D" ] && { [ "$PL_POL" != app-owned ] \
+          || pl_in_auto_capture "$PL_D"; }; then
         _pl_drop "$PL_D" "$PL_DR" || return 1
       fi
       _pl_drop "$PL_M" "$_a_root" && _pl_layer_drop "$PL_D" ;;
